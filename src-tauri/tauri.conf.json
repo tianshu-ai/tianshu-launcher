@@ -5,8 +5,6 @@
   "identifier": "ai.tianshu.launcher",
   "build": {
     "frontendDist": "../ui",
-    "devUrl": "http://localhost:5190",
-    "beforeDevCommand": "",
     "beforeBuildCommand": "node scripts/prepare-payload.mjs"
   },
   "app": {
