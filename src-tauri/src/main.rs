@@ -32,6 +32,14 @@ struct TrayItems {
     toggle_server: Mutex<Option<MenuItem<tauri::Wry>>>,
     stop_all_bridges: Mutex<Option<MenuItem<tauri::Wry>>>,
     restart_server: Mutex<Option<MenuItem<tauri::Wry>>>,
+    bridge_submenu: Mutex<Option<Submenu<tauri::Wry>>>,
+    /// Per-profile Start/Stop MenuItems. Keyed by profile id so
+    /// refresh_tray can toggle the label on each as state changes;
+    /// cleared and rebuilt when the profile list itself changes.
+    bridge_profile_items: Mutex<HashMap<String, MenuItem<tauri::Wry>>>,
+    /// Snapshot of the profile ids currently in the submenu, so we
+    /// can detect when a rebuild is needed (added, removed, renamed).
+    bridge_profile_signature: Mutex<Vec<(String, String)>>, // (id, name)
 }
 
 /// Update the tray icon + dynamic menu labels to reflect current
@@ -42,7 +50,9 @@ struct TrayItems {
 fn refresh_tray(app: &tauri::AppHandle) {
     let state: State<ProcState> = app.state();
     let server_running = state.server.lock().unwrap().is_some();
-    let bridge_count = state.bridges.lock().unwrap().len();
+    let bridge_running_ids: std::collections::HashSet<String> =
+        state.bridges.lock().unwrap().keys().cloned().collect();
+    let bridge_count = bridge_running_ids.len();
     let any_bridge = bridge_count > 0;
     let active = server_running || any_bridge;
 
@@ -53,7 +63,6 @@ fn refresh_tray(app: &tauri::AppHandle) {
         }
     }
 
-    // Dynamic labels + enabled state on tray items we stashed at setup.
     if let Some(items) = app.try_state::<TrayItems>() {
         if let Some(toggle) = items.toggle_server.lock().unwrap().as_ref() {
             let _ = toggle.set_text(if server_running { "Stop Server" } else { "Start Server" });
@@ -69,6 +78,86 @@ fn refresh_tray(app: &tauri::AppHandle) {
                 "Stop All Bridges".to_string()
             });
         }
+
+        // Rebuild per-profile menu entries if the profile list changed.
+        let profiles = load_bridge_config().profiles;
+        let current_sig: Vec<(String, String)> =
+            profiles.iter().map(|p| (p.id.clone(), p.name.clone())).collect();
+        let mut sig_slot = items.bridge_profile_signature.lock().unwrap();
+        if *sig_slot != current_sig {
+            rebuild_bridge_submenu(app, &items, &profiles);
+            *sig_slot = current_sig;
+        }
+
+        // Toggle per-profile labels (Start/Stop) based on live state.
+        for (id, mi) in items.bridge_profile_items.lock().unwrap().iter() {
+            let running = bridge_running_ids.contains(id);
+            if let Some(profile) = profiles.iter().find(|p| &p.id == id) {
+                let _ = mi.set_text(format!(
+                    "{} {}",
+                    if running { "Stop" } else { "Start" },
+                    profile.name,
+                ));
+            }
+        }
+    }
+}
+
+/// Rebuild the per-profile section of the bridge submenu. Keeps the
+/// trailing 'Manage Profiles…' + 'Stop All Bridges' + separator and
+/// discards whatever is above them.
+fn rebuild_bridge_submenu(
+    app: &tauri::AppHandle,
+    items: &TrayItems,
+    profiles: &[BridgeProfile],
+) {
+    let Some(submenu) = items.bridge_submenu.lock().unwrap().clone() else { return };
+    // Clear everything and rebuild from scratch. The 2 tail items are
+    // appended last so their order stays stable.
+    while let Ok(Some(_)) = submenu.remove_at(0) {}
+    items.bridge_profile_items.lock().unwrap().clear();
+
+    // Head: one Start/Stop MenuItem per profile (label refined by the
+    // next refresh_tray pass with the real running state).
+    if profiles.is_empty() {
+        if let Ok(none) = MenuItem::with_id(
+            app,
+            "bridge_none",
+            "(no profiles)",
+            false,
+            None::<&str>,
+        ) {
+            let _ = submenu.append(&none);
+        }
+    } else {
+        for p in profiles {
+            let id = format!("bridge_toggle_{}", p.id);
+            if let Ok(mi) = MenuItem::with_id(app, &id, format!("Start {}", p.name), true, None::<&str>) {
+                let _ = submenu.append(&mi);
+                items
+                    .bridge_profile_items
+                    .lock()
+                    .unwrap()
+                    .insert(p.id.clone(), mi);
+            }
+        }
+    }
+
+    // Tail: separator + Manage Profiles… + Stop All Bridges.
+    if let Ok(sep) = PredefinedMenuItem::separator(app) {
+        let _ = submenu.append(&sep);
+    }
+    if let Ok(manage) = MenuItem::with_id(
+        app,
+        "manage_bridge",
+        "Manage Profiles\u{2026}",
+        true,
+        None::<&str>,
+    ) {
+        let _ = submenu.append(&manage);
+    }
+    if let Some(stop_all) = items.stop_all_bridges.lock().unwrap().as_ref() {
+        let _ = submenu.append(stop_all);
     }
 }
 
@@ -575,6 +664,10 @@ fn main() {
                 true,
                 &[&manage_bridge, &stop_all_bridges],
             )?;
+            // Keep the submenu handle for dynamic per-profile rebuilds.
+            // The initial content (manage_bridge + stop_all_bridges)
+            // will be cleared on first refresh_tray — that's fine, we
+            // re-append fresh handles there.
 
             let sep3 = PredefinedMenuItem::separator(app)?;
             let quit =
@@ -603,9 +696,15 @@ fn main() {
             *items.toggle_server.lock().unwrap() = Some(toggle_server.clone());
             *items.restart_server.lock().unwrap() = Some(restart_server.clone());
             *items.stop_all_bridges.lock().unwrap() = Some(stop_all_bridges.clone());
+            *items.bridge_submenu.lock().unwrap() = Some(bridge_submenu.clone());
             // Initial state: no server, no bridges — reflect that.
             let _ = restart_server.set_enabled(false);
             let _ = stop_all_bridges.set_enabled(false);
+            // Populate per-profile items from config on first launch.
+            let profiles = load_bridge_config().profiles;
+            rebuild_bridge_submenu(app.handle(), &items, &profiles);
+            *items.bridge_profile_signature.lock().unwrap() =
+                profiles.iter().map(|p| (p.id.clone(), p.name.clone())).collect();
 
             let icon = tauri::image::Image::from_bytes(ICON_STOPPED)?;
             let _tray = TrayIconBuilder::with_id("main")
@@ -674,6 +773,22 @@ fn main() {
                         for id in ids {
                             let state: State<ProcState> = app.state();
                             let _ = stop_bridge_profile(id, app.clone(), state);
+                        }
+                    }
+                    other if other.starts_with("bridge_toggle_") => {
+                        let profile_id = other.trim_start_matches("bridge_toggle_").to_string();
+                        let state: State<ProcState> = app.state();
+                        let running = state
+                            .bridges
+                            .lock()
+                            .unwrap()
+                            .contains_key(&profile_id);
+                        if running {
+                            let state: State<ProcState> = app.state();
+                            let _ = stop_bridge_profile(profile_id, app.clone(), state);
+                        } else {
+                            let state: State<ProcState> = app.state();
+                            let _ = start_bridge_profile(profile_id, app.clone(), state);
                         }
                     }
                     _ => {}
