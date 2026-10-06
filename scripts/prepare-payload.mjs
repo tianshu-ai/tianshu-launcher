@@ -16,7 +16,7 @@
 //                                    [--bridge-version <semver|latest>]
 //                                    [--node-version v22.x.y]
 
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -148,24 +148,32 @@ async function prepareNode() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "node-dl-"));
   const archive = path.join(tmp, path.basename(url));
   await download(url, archive);
+  // Use execFileSync (argv, no shell) so paths with spaces or odd
+  // chars don't need per-platform quoting. POSIX 'quote()' uses single
+  // quotes which Windows CreateProcess reads literally and chokes on.
   if (url.endsWith(".zip")) {
-    // Windows ships tar.exe (bsdtar) in system32 since Windows 10 1803,
-    // which handles zip natively. 'unzip' only exists via Git Bash /
-    // MSYS2 — not something we can rely on. Use PowerShell as a
-    // fallback on older Windows (Expand-Archive).
+    // Windows 10 1803+ ships tar.exe (bsdtar) in system32 which
+    // handles zip natively. 'unzip' only exists via Git Bash on
+    // Windows. Try tar first, fall back to PowerShell Expand-Archive.
     if (process.platform === "win32") {
       try {
-        execSync(`tar -xf ${quote(archive)} -C ${quote(tmp)}`);
+        execFileSync("tar", ["-xf", archive, "-C", tmp], { stdio: "inherit" });
       } catch {
-        execSync(
-          `powershell -NoProfile -Command "Expand-Archive -Force -Path '${archive.replace(/'/g, "''")}' -DestinationPath '${tmp.replace(/'/g, "''")}'"`,
+        execFileSync(
+          "powershell",
+          [
+            "-NoProfile",
+            "-Command",
+            `Expand-Archive -Force -Path "${archive}" -DestinationPath "${tmp}"`,
+          ],
+          { stdio: "inherit" },
         );
       }
     } else {
-      execSync(`unzip -o -q ${quote(archive)} -d ${quote(tmp)}`);
+      execFileSync("unzip", ["-o", "-q", archive, "-d", tmp], { stdio: "inherit" });
     }
   } else {
-    execSync(`tar -xf ${quote(archive)} -C ${quote(tmp)}`);
+    execFileSync("tar", ["-xf", archive, "-C", tmp], { stdio: "inherit" });
   }
   const extracted = path.join(tmp, inner);
   fs.copyFileSync(extracted, destBin);
