@@ -127,9 +127,16 @@ fn rustc_target_triple() -> &'static str {
 
 // ─── child spawn/kill ───────────────────────────────────────────────
 
-fn spawn_child(node: &PathBuf, entry: &PathBuf) -> Result<Child, String> {
+fn spawn_child(
+    node: &PathBuf,
+    entry: &PathBuf,
+    extra_env: &[(&str, PathBuf)],
+) -> Result<Child, String> {
     let mut cmd = Command::new(node);
     cmd.arg(entry);
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
     #[cfg(windows)]
     {
@@ -139,6 +146,31 @@ fn spawn_child(node: &PathBuf, entry: &PathBuf) -> Result<Child, String> {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd.spawn().map_err(|e| format!("spawn failed: {e}"))
+}
+
+/// Locate the bundled web UI dist directory next to the server payload.
+/// The @tianshu-ai/tianshu npm package ships packages/web/dist/ as part of
+/// the install; the server mounts it via TIANSHU_WEB_DIST (see
+/// packages/server/dist/boot/static-spa.js).
+fn web_dist_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    // Server shim is at resources/server/index.js and the real web dist
+    // sits at resources/server/node_modules/@tianshu-ai/tianshu/packages/web/dist/.
+    let server_entry = resource_payload_path(app, "server")?;
+    let server_root = server_entry
+        .parent()
+        .ok_or_else(|| "no parent for server entry".to_string())?;
+    let web = server_root
+        .join("node_modules")
+        .join("@tianshu-ai")
+        .join("tianshu")
+        .join("packages")
+        .join("web")
+        .join("dist");
+    if web.join("index.html").exists() {
+        Ok(web)
+    } else {
+        Err(format!("web dist not found at {web:?}"))
+    }
 }
 
 fn kill_child(child_opt: &mut Option<Child>) {
@@ -170,7 +202,8 @@ fn start_server(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status
     }
     let node = node_sidecar_path(&app)?;
     let entry = resource_payload_path(&app, "server")?;
-    let child = spawn_child(&node, &entry)?;
+    let web = web_dist_path(&app)?;
+    let child = spawn_child(&node, &entry, &[("TIANSHU_WEB_DIST", web)])?;
     *server = Some(child);
     let _ = app.emit("status-changed", ());
     drop(server);
@@ -196,7 +229,7 @@ fn start_bridge(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status
     }
     let node = node_sidecar_path(&app)?;
     let entry = resource_payload_path(&app, "bridge")?;
-    let child = spawn_child(&node, &entry)?;
+    let child = spawn_child(&node, &entry, &[])?;
     *bridge = Some(child);
     let _ = app.emit("status-changed", ());
     drop(bridge);
