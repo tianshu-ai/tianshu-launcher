@@ -8,6 +8,7 @@
     "beforeBuildCommand": "node scripts/prepare-payload.mjs"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Tianshu",

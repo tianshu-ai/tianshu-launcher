@@ -194,6 +194,15 @@ fn stop_bridge(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status,
     Ok(status(state))
 }
 
+#[tauri::command]
+fn open_web_ui(app: tauri::AppHandle, state: State<ProcState>) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let port = status(state).server_port;
+    app.opener()
+        .open_url(format!("http://localhost:{port}"), None::<&str>)
+        .map_err(|e| format!("open_url: {e}"))
+}
+
 // ─── main ───────────────────────────────────────────────────────────
 
 fn main() {
@@ -274,7 +283,8 @@ fn main() {
             start_server,
             stop_server,
             start_bridge,
-            stop_bridge
+            stop_bridge,
+            open_web_ui
         ])
         .on_window_event(|window, event| {
             // Hide window on close instead of quitting; tray stays alive.

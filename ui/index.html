@@ -139,9 +139,9 @@
   </div>
 
   <script type="module">
+    // withGlobalTauri=true in tauri.conf.json injects these globals.
     const { invoke } = window.__TAURI__.core;
     const { listen } = window.__TAURI__.event;
-    const { open } = window.__TAURI__.opener;
 
     const els = {
       serverDot: document.getElementById("server-dot"),
@@ -197,7 +197,7 @@
     });
 
     els.openUiBtn.addEventListener("click", async () => {
-      await open(`http://localhost:${state.server_port}`);
+      await invoke("open_web_ui");
     });
 
     listen("status-changed", refresh);
