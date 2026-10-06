@@ -24,20 +24,50 @@ use tauri::{
     Emitter, Manager, State,
 };
 
-/// Update the tray icon to reflect current running state. Synchronous
-/// — called from inside each start/stop command after it releases its
-/// own state locks. Deliberately NOT wired through app.listen() to
-/// avoid any chance of the event loop + lock-reacquire deadlocking
-/// the webview.
+/// Handles to tray MenuItems whose labels change with state. Stored
+/// as app-managed state so refresh_tray can mutate them from any
+/// thread without re-building the menu.
+#[derive(Default)]
+struct TrayItems {
+    toggle_server: Mutex<Option<MenuItem<tauri::Wry>>>,
+    stop_all_bridges: Mutex<Option<MenuItem<tauri::Wry>>>,
+    restart_server: Mutex<Option<MenuItem<tauri::Wry>>>,
+}
+
+/// Update the tray icon + dynamic menu labels to reflect current
+/// running state. Synchronous — called from inside each start/stop
+/// command after it releases its own state locks. Deliberately NOT
+/// wired through app.listen() to avoid any chance of the event loop
+/// + lock-reacquire deadlocking the webview.
 fn refresh_tray(app: &tauri::AppHandle) {
     let state: State<ProcState> = app.state();
     let server_running = state.server.lock().unwrap().is_some();
-    let any_bridge = !state.bridges.lock().unwrap().is_empty();
+    let bridge_count = state.bridges.lock().unwrap().len();
+    let any_bridge = bridge_count > 0;
     let active = server_running || any_bridge;
+
     if let Some(tray) = app.tray_by_id("main") {
         let bytes: &[u8] = if active { ICON_RUNNING } else { ICON_STOPPED };
         if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
             let _ = tray.set_icon(Some(img));
+        }
+    }
+
+    // Dynamic labels + enabled state on tray items we stashed at setup.
+    if let Some(items) = app.try_state::<TrayItems>() {
+        if let Some(toggle) = items.toggle_server.lock().unwrap().as_ref() {
+            let _ = toggle.set_text(if server_running { "Stop Server" } else { "Start Server" });
+        }
+        if let Some(restart) = items.restart_server.lock().unwrap().as_ref() {
+            let _ = restart.set_enabled(server_running);
+        }
+        if let Some(stop_all) = items.stop_all_bridges.lock().unwrap().as_ref() {
+            let _ = stop_all.set_enabled(any_bridge);
+            let _ = stop_all.set_text(if bridge_count > 1 {
+                format!("Stop All Bridges ({bridge_count})")
+            } else {
+                "Stop All Bridges".to_string()
+            });
         }
     }
 }
@@ -485,6 +515,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(ProcState::default())
+        .manage(TrayItems::default())
         .setup(|app| {
             // Grouped tray menu. Tauri 2 doesn't expose NSMenuItem
             // image/icon APIs cross-platform, so emoji glyphs in the
@@ -564,6 +595,17 @@ fn main() {
                     &quit,
                 ],
             )?;
+
+            // Stash handles for the items whose labels/enabled flag
+            // change at runtime. refresh_tray looks them up via
+            // app.state::<TrayItems>().
+            let items: State<TrayItems> = app.state();
+            *items.toggle_server.lock().unwrap() = Some(toggle_server.clone());
+            *items.restart_server.lock().unwrap() = Some(restart_server.clone());
+            *items.stop_all_bridges.lock().unwrap() = Some(stop_all_bridges.clone());
+            // Initial state: no server, no bridges — reflect that.
+            let _ = restart_server.set_enabled(false);
+            let _ = stop_all_bridges.set_enabled(false);
 
             let icon = tauri::image::Image::from_bytes(ICON_STOPPED)?;
             let _tray = TrayIconBuilder::with_id("main")
