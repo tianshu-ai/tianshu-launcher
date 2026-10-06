@@ -55,8 +55,13 @@ function rustTargetTriple() {
 // ─── payload installers ─────────────────────────────────────────────
 
 /** Install an npm package + its production deps into resources/<name>/.
- *  Writes an ESM shim entry so the sidecar can `node index.js`. */
-function installPackagePayload(subdir, spec, label) {
+ *  Writes an ESM shim entry so the sidecar can `node index.js`.
+ *
+ *  `entry`: 'bin' uses the package's bin field (bridge-style CLI that
+ *  itself boots the server when run with no args). 'server' forces
+ *  dist/index.js — needed for @tianshu-ai/tianshu, whose bin is
+ *  'tianshu' (a service manager that prints help without args). */
+function installPackagePayload(subdir, spec, label, entry = "bin") {
   const dest = path.join(srcTauri, "resources", subdir);
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(dest, { recursive: true });
@@ -80,10 +85,21 @@ function installPackagePayload(subdir, spec, label) {
 
   cpDir(path.join(tmp, "node_modules"), path.join(dest, "node_modules"));
   // Entry shim so Rust can spawn `node index.js` regardless of layout.
-  const binField = readBinField(pkgDir);
-  const binRel = binField
-    ? path.relative(tmp, path.join(pkgDir, binField)).replace(/\\/g, "/")
-    : path.relative(tmp, path.join(pkgDir, "dist", "index.js")).replace(/\\/g, "/");
+  let binRel;
+  if (entry === "server") {
+    // Force dist/index.js — the server entrypoint. @tianshu-ai/tianshu's
+    // 'bin' field points at a CLI (service manager), not the server
+    // process the launcher needs to spawn directly.
+    binRel = path.relative(tmp, path.join(pkgDir, "packages", "server", "dist", "index.js")).replace(/\\/g, "/");
+    if (!fs.existsSync(path.join(tmp, binRel))) {
+      throw new Error(`server entry not found: ${binRel}`);
+    }
+  } else {
+    const binField = readBinField(pkgDir);
+    binRel = binField
+      ? path.relative(tmp, path.join(pkgDir, binField)).replace(/\\/g, "/")
+      : path.relative(tmp, path.join(pkgDir, "dist", "index.js")).replace(/\\/g, "/");
+  }
   fs.writeFileSync(
     path.join(dest, "index.js"),
     `import "./${binRel}";\n`,
@@ -205,6 +221,7 @@ function quote(s) {
     "server",
     `@tianshu-ai/tianshu@${SERVER_VERSION}`,
     "tianshu server",
+    "server",
   );
   installPackagePayload(
     "bridge",
