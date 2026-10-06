@@ -250,6 +250,18 @@ function quote(s) {
     `@tianshu-ai/local-bridge@${BRIDGE_VERSION}`,
     "local-bridge",
   );
+
+  // @playwright/mcp is the browser-engine MCP server that local-bridge
+  // shells out to. It's not a direct dependency of local-bridge (it's
+  // resolved at runtime via resolveEmbeddedMcp), so npm install won't
+  // pull it automatically. Install it into the bridge payload so the
+  // bundled bridge can find it without needing npx (which isn't
+  // available in the Tauri .app / .exe — we only ship a bare node).
+  console.log("[payload] installing @playwright/mcp into bridge payload\u2026");
+  execSync(
+    "npm install --omit=dev --no-audit --no-fund --legacy-peer-deps @playwright/mcp@latest",
+    { cwd: path.join(srcTauri, "resources", "bridge"), stdio: "inherit" },
+  );
   await prepareNode();
   console.log("[payload] done.");
 })().catch((e) => {
