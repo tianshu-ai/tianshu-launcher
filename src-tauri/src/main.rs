@@ -776,10 +776,20 @@ fn start_server(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status
     let node = node_sidecar_path(&app)?;
     let entry = resource_payload_path(&app, "server")?;
     let web = web_dist_path(&app)?;
+    // Pass TIANSHU_IGNORE_SETUP so the server boots even when the
+    // user hasn't run `tianshu setup --wizard` yet — a brand-new
+    // launcher install has no ~/.tianshu/config.json and no LLM
+    // provider configured, which otherwise aborts startup. Once
+    // the server is up the user can open the web UI and configure
+    // things from there.
+    let ignore = PathBuf::from("1");
     let child = spawn_child_logged(
         &node,
         &entry,
-        &[("TIANSHU_WEB_DIST", web)],
+        &[
+            ("TIANSHU_WEB_DIST", web),
+            ("TIANSHU_IGNORE_SETUP", ignore),
+        ],
         "server",
         &[],
     )?;
