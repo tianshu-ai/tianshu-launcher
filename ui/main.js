@@ -367,14 +367,24 @@
     const trimmed = raw.trim();
     if (!trimmed) return null;
     // 1. tsbridge:// URL
+    // Format emitted by tianshu's reverse-mcp UI:
+    //   tsbridge://configure?server=...&token=***&browser=0|1
+    //     &engine=own|stealth&headless=0|1&shell=0|1&device=...
     if (/^tsbridge:\/\//i.test(trimmed)) {
       try {
         const u = new URL(trimmed);
-        return {
-          server: u.searchParams.get("server") || "",
-          token: u.searchParams.get("token") || "",
-          device: u.searchParams.get("device") || "",
+        const p = u.searchParams;
+        const bool01 = (v) => v === "1" || v === "true";
+        const out = {
+          server: p.get("server") || "",
+          token: p.get("token") || "",
+          device: p.get("device") || "",
         };
+        if (p.has("browser")) out.browser = bool01(p.get("browser"));
+        if (p.has("engine")) out.engine = p.get("engine");
+        if (p.has("headless")) out.headless = bool01(p.get("headless"));
+        if (p.has("shell")) out.shell = bool01(p.get("shell"));
+        return out;
       } catch { return null; }
     }
     // 2. JSON
