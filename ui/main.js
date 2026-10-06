@@ -269,13 +269,27 @@
     const actions = document.createElement("div");
     actions.className = "form-row actions";
 
+    // Two-step delete: first click arms, second click within 3s confirms.
+    // window.confirm() is blocked in Tauri's webview on some platforms,
+    // so we handle confirmation inline.
     const delBtn = document.createElement("button");
     delBtn.className = "danger";
     delBtn.textContent = "Delete";
+    let armed = false;
+    let armTimer = null;
     delBtn.addEventListener("click", async () => {
-      if (!confirm(`Delete profile "${original.name}"?`)) return;
+      if (!armed) {
+        armed = true;
+        delBtn.textContent = "Click again to confirm";
+        armTimer = setTimeout(() => {
+          armed = false;
+          delBtn.textContent = "Delete";
+        }, 3000);
+        return;
+      }
+      clearTimeout(armTimer);
+      armed = false;
       try {
-        // Stop if running
         if (statusMap.get(original.id)) {
           await invoke("stop_bridge_profile", { id: original.id });
         }
@@ -284,9 +298,10 @@
         openEdits.delete(original.id);
         editDrafts.delete(original.id);
         await refreshBridge();
-        toast("Deleted");
+        toast("Deleted " + (original.name || "profile"));
       } catch (err) {
         toast("Delete: " + err, "error");
+        console.error("delete failed:", err);
       }
     });
     actions.appendChild(delBtn);
