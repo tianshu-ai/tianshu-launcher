@@ -24,6 +24,24 @@ use tauri::{
     Emitter, Manager, State,
 };
 
+/// Update the tray icon to reflect current running state. Synchronous
+/// — called from inside each start/stop command after it releases its
+/// own state locks. Deliberately NOT wired through app.listen() to
+/// avoid any chance of the event loop + lock-reacquire deadlocking
+/// the webview.
+fn refresh_tray(app: &tauri::AppHandle) {
+    let state: State<ProcState> = app.state();
+    let server_running = state.server.lock().unwrap().is_some();
+    let any_bridge = !state.bridges.lock().unwrap().is_empty();
+    let active = server_running || any_bridge;
+    if let Some(tray) = app.tray_by_id("main") {
+        let bytes: &[u8] = if active { ICON_RUNNING } else { ICON_STOPPED };
+        if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
+            let _ = tray.set_icon(Some(img));
+        }
+    }
+}
+
 static ICON_STOPPED: &[u8] = include_bytes!("../icons/tray/stopped.png");
 static ICON_RUNNING: &[u8] = include_bytes!("../icons/tray/running.png");
 
@@ -340,8 +358,9 @@ fn start_server(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status
     let web = web_dist_path(&app)?;
     let child = spawn_child(&node, &entry, &[("TIANSHU_WEB_DIST", web)])?;
     *server = Some(child);
-    let _ = app.emit("status-changed", ());
     drop(server);
+    let _ = app.emit("status-changed", ());
+    refresh_tray(&app);
     Ok(status(state))
 }
 
@@ -352,6 +371,7 @@ fn stop_server(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status,
         kill_child(&mut server);
     }
     let _ = app.emit("status-changed", ());
+    refresh_tray(&app);
     Ok(status(state))
 }
 
@@ -426,6 +446,7 @@ fn start_bridge_profile(
         bridges.insert(id, child);
     }
     let _ = app.emit("status-changed", ());
+    refresh_tray(&app);
     Ok(())
 }
 
@@ -443,6 +464,7 @@ fn stop_bridge_profile(
         }
     }
     let _ = app.emit("status-changed", ());
+    refresh_tray(&app);
     Ok(())
 }
 
@@ -478,7 +500,7 @@ fn main() {
             )?;
 
             let icon = tauri::image::Image::from_bytes(ICON_STOPPED)?;
-            let _tray = TrayIconBuilder::new()
+            let _tray = TrayIconBuilder::with_id("main")
                 .icon(icon)
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
@@ -555,8 +577,4 @@ fn main() {
         .expect("error while running tianshu-launcher");
 }
 
-// Suppress unused warning for ICON_RUNNING until pulsing animation is wired.
-#[allow(dead_code)]
-fn _icon_running() -> &'static [u8] {
-    ICON_RUNNING
-}
+
