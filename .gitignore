@@ -19,3 +19,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# tauri icon mobile output (desktop-only project)
+src-tauri/icons/android/
+src-tauri/icons/ios/
