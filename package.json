@@ -1,6 +1,6 @@
 {
   "name": "tianshu-launcher",
-  "version": "0.1.0-3",
+  "version": "0.1.0-4",
   "private": true,
   "description": "Tianshu Launcher — self-contained desktop app bundling tianshu server, Node runtime, and local-bridge. One click to start the whole stack.",
   "type": "module",
