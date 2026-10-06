@@ -12,6 +12,7 @@
 #[cfg(unix)]
 extern crate libc;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
@@ -31,7 +32,92 @@ static ICON_RUNNING: &[u8] = include_bytes!("../icons/tray/running.png");
 #[derive(Default)]
 struct ProcState {
     server: Mutex<Option<Child>>,
-    bridge: Mutex<Option<Child>>,
+    /// Running bridge children keyed by profile id. Multiple profiles
+    /// can run concurrently (same model as bridge-desktop).
+    bridges: Mutex<HashMap<String, Child>>,
+}
+
+// ─── bridge profile config (compatible with bridge-desktop) ─────────
+//
+// Config lives at ~/.tianshu-bridge/config.json so launcher and the
+// standalone bridge-desktop app share the same profile list.
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct BridgeProfile {
+    #[serde(default = "gen_id")]
+    id: String,
+    #[serde(default = "default_name")]
+    name: String,
+    #[serde(default = "default_server")]
+    server: String,
+    #[serde(default)]
+    token: String,
+    #[serde(default)]
+    device: String,
+    #[serde(default = "default_true")]
+    auto_start: bool,
+    #[serde(default = "default_true")]
+    browser: bool,
+    #[serde(default = "default_engine")]
+    engine: String,
+    #[serde(default)]
+    headless: bool,
+    #[serde(default)]
+    shell: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+struct BridgeConfig {
+    #[serde(default)]
+    profiles: Vec<BridgeProfile>,
+}
+
+fn default_name() -> String { "Default".into() }
+fn default_server() -> String { "ws://localhost:3110/ws".into() }
+fn default_true() -> bool { true }
+fn default_engine() -> String { "own".into() }
+
+fn gen_id() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    std::time::SystemTime::now().hash(&mut h);
+    std::thread::current().id().hash(&mut h);
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("p_{:x}_{:x}", ms, h.finish() as u32)
+}
+
+fn bridge_config_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Ok(p) = std::env::var("USERPROFILE") {
+            return PathBuf::from(p).join(".tianshu-bridge");
+        }
+    }
+    if let Ok(p) = std::env::var("HOME") {
+        return PathBuf::from(p).join(".tianshu-bridge");
+    }
+    PathBuf::from(".tianshu-bridge")
+}
+
+fn bridge_config_path() -> PathBuf { bridge_config_dir().join("config.json") }
+
+fn load_bridge_config() -> BridgeConfig {
+    let path = bridge_config_path();
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return BridgeConfig::default();
+    };
+    serde_json::from_str(&content).unwrap_or_default()
+}
+
+fn save_bridge_config(cfg: &BridgeConfig) -> Result<(), String> {
+    let dir = bridge_config_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    std::fs::write(bridge_config_path(), json).map_err(|e| e.to_string())
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -180,15 +266,64 @@ fn kill_child(child_opt: &mut Option<Child>) {
     }
 }
 
+/// Build the CLI argv for a bridge profile. Must stay in sync with
+/// bridge-desktop's spawn args in its main.rs.
+fn bridge_cli_args(profile: &BridgeProfile) -> Vec<String> {
+    let mut args: Vec<String> = vec!["--server".into(), profile.server.clone()];
+    if !profile.token.is_empty() {
+        args.push("--token".into());
+        args.push(profile.token.clone());
+    }
+    if profile.browser {
+        if profile.engine == "stealth" {
+            args.push("--browser-engine".into());
+            args.push("stealth".into());
+        }
+        if profile.headless {
+            args.push("--headless".into());
+        }
+    } else {
+        args.push("--no-browser".into());
+    }
+    if profile.shell {
+        args.push("--shell".into());
+    }
+    if !profile.device.is_empty() {
+        args.push("--device".into());
+        args.push(profile.device.clone());
+    }
+    args
+}
+
+fn spawn_bridge_child(
+    node: &PathBuf,
+    entry: &PathBuf,
+    profile: &BridgeProfile,
+) -> Result<Child, String> {
+    let mut cmd = Command::new(node);
+    cmd.arg(entry);
+    cmd.args(bridge_cli_args(profile));
+    cmd.stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.spawn().map_err(|e| format!("bridge spawn failed: {e}"))
+}
+
 // ─── Tauri commands (invoked from UI) ───────────────────────────────
 
 #[tauri::command]
 fn status(state: State<ProcState>) -> Status {
     let server = state.server.lock().unwrap();
-    let bridge = state.bridge.lock().unwrap();
+    let bridges = state.bridges.lock().unwrap();
     Status {
         server_running: server.is_some(),
-        bridge_running: bridge.is_some(),
+        bridge_running: !bridges.is_empty(),
         server_port: 3110, // tianshu default; could be read from config.json later
     }
 }
@@ -220,30 +355,95 @@ fn stop_server(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status,
     Ok(status(state))
 }
 
-#[tauri::command]
-fn start_bridge(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status, String> {
-    let mut bridge = state.bridge.lock().unwrap();
-    if bridge.is_some() {
-        drop(bridge);
-        return Ok(status(state));
-    }
-    let node = node_sidecar_path(&app)?;
-    let entry = resource_payload_path(&app, "bridge")?;
-    let child = spawn_child(&node, &entry, &[])?;
-    *bridge = Some(child);
-    let _ = app.emit("status-changed", ());
-    drop(bridge);
-    Ok(status(state))
+// ─── bridge profile commands ────────────────────────────────────────
+
+#[derive(Serialize)]
+struct ProfileStatus {
+    id: String,
+    name: String,
+    server: String,
+    running: bool,
 }
 
 #[tauri::command]
-fn stop_bridge(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status, String> {
+fn load_bridge_profiles() -> BridgeConfig {
+    load_bridge_config()
+}
+
+#[tauri::command]
+fn save_bridge_profiles(cfg: BridgeConfig) -> Result<(), String> {
+    save_bridge_config(&cfg)
+}
+
+#[tauri::command]
+fn bridge_status(state: State<ProcState>) -> Vec<ProfileStatus> {
+    let cfg = load_bridge_config();
+    let mut bridges = state.bridges.lock().unwrap();
+    // Reap dead children before reporting.
+    let dead: Vec<String> = bridges
+        .iter_mut()
+        .filter_map(|(id, child)| match child.try_wait() {
+            Ok(Some(_)) => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    for id in &dead {
+        bridges.remove(id);
+    }
+    cfg.profiles
+        .iter()
+        .map(|p| ProfileStatus {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            server: p.server.clone(),
+            running: bridges.contains_key(&p.id),
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn start_bridge_profile(
+    id: String,
+    app: tauri::AppHandle,
+    state: State<ProcState>,
+) -> Result<(), String> {
+    let cfg = load_bridge_config();
+    let profile = cfg
+        .profiles
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or_else(|| format!("profile not found: {id}"))?
+        .clone();
+    let node = node_sidecar_path(&app)?;
+    let entry = resource_payload_path(&app, "bridge")?;
+    let child = spawn_bridge_child(&node, &entry, &profile)?;
     {
-        let mut bridge = state.bridge.lock().unwrap();
-        kill_child(&mut bridge);
+        let mut bridges = state.bridges.lock().unwrap();
+        if let Some(mut old) = bridges.remove(&id) {
+            let _ = old.kill();
+            let _ = old.wait();
+        }
+        bridges.insert(id, child);
     }
     let _ = app.emit("status-changed", ());
-    Ok(status(state))
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_bridge_profile(
+    id: String,
+    app: tauri::AppHandle,
+    state: State<ProcState>,
+) -> Result<(), String> {
+    {
+        let mut bridges = state.bridges.lock().unwrap();
+        if let Some(mut child) = bridges.remove(&id) {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    let _ = app.emit("status-changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -288,8 +488,11 @@ fn main() {
                             kill_child(&mut server);
                         }
                         {
-                            let mut bridge = state.bridge.lock().unwrap();
-                            kill_child(&mut bridge);
+                            let mut bridges = state.bridges.lock().unwrap();
+                            for (_, mut child) in bridges.drain() {
+                                let _ = child.kill();
+                                let _ = child.wait();
+                            }
                         }
                         app.exit(0);
                     }
@@ -309,12 +512,11 @@ fn main() {
                         }
                     }
                     "toggle_bridge" => {
-                        let state: State<ProcState> = app.state();
-                        let running = state.bridge.lock().unwrap().is_some();
-                        if running {
-                            let _ = stop_bridge(app.clone(), state);
-                        } else {
-                            let _ = start_bridge(app.clone(), state);
+                        // Open the main window so the user picks a profile.
+                        // Tray can't know which profile to start without UI.
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
                         }
                     }
                     _ => {}
@@ -334,9 +536,12 @@ fn main() {
             status,
             start_server,
             stop_server,
-            start_bridge,
-            stop_bridge,
-            open_web_ui
+            open_web_ui,
+            load_bridge_profiles,
+            save_bridge_profiles,
+            bridge_status,
+            start_bridge_profile,
+            stop_bridge_profile
         ])
         .on_window_event(|window, event| {
             // Hide window on close instead of quitting; tray stays alive.

@@ -9,38 +9,78 @@
       color-scheme: dark;
       --bg: #0a0f1a;
       --surface: #131a27;
+      --surface-2: #1a2232;
       --accent: #c9a96e;
       --fg: #e8e8e8;
       --fg-muted: #9ca3af;
       --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.16);
+      --danger: #ef4444;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 24px;
+      padding: 20px 24px;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
       background: var(--bg);
       color: var(--fg);
-      font-size: 14px;
+      font-size: 13px;
       line-height: 1.5;
     }
     h1 {
-      font-size: 22px;
+      font-size: 20px;
       font-weight: 600;
-      margin: 0 0 4px 0;
+      margin: 0 0 2px 0;
       color: var(--accent);
     }
     .tagline {
       color: var(--fg-muted);
-      font-size: 13px;
-      margin-bottom: 24px;
+      font-size: 12px;
+      margin-bottom: 16px;
     }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .tab {
+      padding: 8px 16px;
+      cursor: pointer;
+      color: var(--fg-muted);
+      border-bottom: 2px solid transparent;
+      font-size: 13px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    .tab:hover { color: var(--fg); }
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .tab-badge {
+      font-size: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 1px 6px;
+      border-radius: 10px;
+      margin-left: 4px;
+      vertical-align: 1px;
+    }
+    .tab.active .tab-badge { background: rgba(201, 169, 110, 0.2); color: var(--accent); }
+
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* Cards */
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 14px 16px;
-      margin-bottom: 12px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+    }
+    .card.row {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -50,6 +90,7 @@
       display: flex;
       flex-direction: column;
       min-width: 0;
+      flex: 1;
     }
     .card-title {
       font-weight: 500;
@@ -67,16 +108,21 @@
     .dot.on { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.4); }
     .card-sub {
       color: var(--fg-muted);
-      font-size: 12px;
+      font-size: 11px;
       margin-top: 2px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
+
+    /* Buttons */
     button {
-      padding: 6px 14px;
+      padding: 5px 12px;
       border-radius: 6px;
       border: 1px solid var(--border);
       background: transparent;
       color: var(--fg);
-      font-size: 13px;
+      font-size: 12px;
       cursor: pointer;
       transition: background 0.15s, border-color 0.15s;
       white-space: nowrap;
@@ -89,17 +135,132 @@
       font-weight: 500;
     }
     button.primary:hover { background: #d4b57e; }
+    button.danger {
+      color: var(--danger);
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+    button.danger:hover { background: rgba(239, 68, 68, 0.08); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-group { display: flex; gap: 6px; }
+
     .open-ui-row {
-      margin-top: 20px;
+      margin-top: 16px;
       text-align: center;
     }
-    .footer {
-      margin-top: 24px;
-      padding-top: 16px;
-      border-top: 1px solid var(--border);
+
+    /* Profile edit form */
+    .profile-card {
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .profile-card.running { border-color: #10b981; }
+    .profile-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .profile-name {
+      flex: 1;
+      font-weight: 500;
+      font-size: 13px;
+    }
+    .profile-server {
       color: var(--fg-muted);
       font-size: 11px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      margin-bottom: 6px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .edit-form {
+      display: none;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      flex-direction: column;
+      gap: 8px;
+    }
+    .edit-form.open { display: flex; }
+    .form-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .form-row label {
+      width: 72px;
+      font-size: 11px;
+      color: var(--fg-muted);
+      flex-shrink: 0;
+    }
+    .form-row input[type="text"],
+    .form-row input[type="password"],
+    .form-row select {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--fg);
+      padding: 4px 8px;
+      font-size: 12px;
+      font-family: inherit;
+      outline: none;
+    }
+    .form-row input:focus, .form-row select:focus { border-color: var(--border-strong); }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--fg-muted);
+    }
+    .form-row.inline {
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .form-row.actions {
+      justify-content: flex-end;
+      margin-top: 4px;
+      gap: 6px;
+    }
+
+    .empty {
+      text-align: center;
+      padding: 24px;
+      color: var(--fg-muted);
+      font-size: 12px;
+    }
+    .add-row {
+      margin-top: 10px;
+      text-align: center;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--surface-2);
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      padding: 6px 14px;
+      font-size: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+      z-index: 10;
+    }
+    .toast.visible { opacity: 1; }
+    .toast.error { border-color: var(--danger); color: var(--danger); }
+
+    .footer {
+      margin-top: 20px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      color: var(--fg-muted);
+      font-size: 10px;
       text-align: center;
     }
   </style>
@@ -108,35 +269,45 @@
   <h1>⭐ Tianshu</h1>
   <div class="tagline">AI agent runtime — self-contained desktop launcher</div>
 
-  <div class="card">
-    <div class="card-info">
-      <div class="card-title">
-        <span class="dot" id="server-dot"></span>
-        Server
-      </div>
-      <div class="card-sub" id="server-sub">Stopped</div>
+  <div class="tabs">
+    <div class="tab active" data-tab="server">Server</div>
+    <div class="tab" data-tab="bridge">
+      Local Bridge
+      <span class="tab-badge" id="bridge-badge">0</span>
     </div>
-    <button id="server-btn" class="primary">Start</button>
   </div>
 
-  <div class="card">
-    <div class="card-info">
-      <div class="card-title">
-        <span class="dot" id="bridge-dot"></span>
-        Local Bridge
+  <!-- Server tab -->
+  <div id="tab-server" class="tab-panel active">
+    <div class="card row">
+      <div class="card-info">
+        <div class="card-title">
+          <span class="dot" id="server-dot"></span>
+          Tianshu Server
+        </div>
+        <div class="card-sub" id="server-sub">Stopped</div>
       </div>
-      <div class="card-sub">Optional — browser/shell for Windows or isolated environments</div>
+      <button id="server-btn" class="primary">Start</button>
     </div>
-    <button id="bridge-btn">Start</button>
+
+    <div class="open-ui-row">
+      <button id="open-ui-btn" class="primary" disabled>Open Tianshu →</button>
+    </div>
   </div>
 
-  <div class="open-ui-row">
-    <button id="open-ui-btn" class="primary" disabled>Open Tianshu →</button>
+  <!-- Bridge tab -->
+  <div id="tab-bridge" class="tab-panel">
+    <div id="profile-list"></div>
+    <div class="add-row">
+      <button id="add-profile-btn">+ Add Profile</button>
+    </div>
   </div>
 
   <div class="footer">
-    Config writes to <code id="home-path">~/.tianshu/</code>
+    Server: <code>~/.tianshu/</code> · Bridge: <code>~/.tianshu-bridge/</code>
   </div>
+
+  <div class="toast" id="toast"></div>
 
   <script src="main.js"></script>
 </body>
