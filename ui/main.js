@@ -577,24 +577,75 @@
 
     checkUpdatesBtn.disabled = true;
     updatesTitle.textContent = "Updating\u2026";
-    updatesBody.innerHTML = "<div class=\"empty\">Installing. This can take a minute.</div>";
 
+    // Build a progress list so the user sees each step.
+    const progressEl = document.createElement("div");
+    progressEl.className = "update-progress";
+    updatesBody.innerHTML = "";
+    updatesBody.appendChild(progressEl);
+
+    function addLine(text, status) {
+      const row = document.createElement("div");
+      row.className = "update-row " + status;
+      row.textContent = text;
+      progressEl.appendChild(row);
+      return row;
+    }
+
+    function updateLine(row, text, status) {
+      row.textContent = text;
+      row.className = "update-row " + status;
+    }
+
+    let allOk = true;
     try {
       for (const c of payloadUpdates) {
         const spec = COMPONENT_INSTALL_MAP[c.name];
         if (!spec) continue;
-        await invoke("update_payload", { sub: spec.sub, package: spec.package });
+        const row = addLine(
+          c.name + ": installing " + (c.latest || "latest") + "\u2026",
+          "pending"
+        );
+        try {
+          await invoke("update_payload", { sub: spec.sub, package: spec.package });
+          updateLine(
+            row,
+            c.name + ": \u2713 updated to " + (c.latest || "latest"),
+            "ok"
+          );
+        } catch (err) {
+          updateLine(row, c.name + ": \u2717 " + err, "fail");
+          allOk = false;
+        }
       }
       if (launcherUpdate) {
-        toast("Launcher update: install new .dmg/.msi from GitHub Releases");
+        addLine(
+          "Launcher: download new version from GitHub Releases",
+          "info"
+        );
       }
-      if (payloadUpdates.length > 0) {
-        toast("Restarting to apply updates\u2026");
-        await new Promise((r) => setTimeout(r, 800));
-        await invoke("restart_launcher");
-      } else {
+
+      if (allOk && payloadUpdates.length > 0) {
+        addLine("Restarting server to apply updates\u2026", "pending");
+        await new Promise((r) => setTimeout(r, 600));
+        try {
+          await invoke("restart_launcher");
+        } catch (_) {
+          // restart_launcher kills the process; invoke may reject.
+          // That's normal. If we're still alive, re-check versions.
+          updatesTitle.textContent = "Updated";
+          updatesTitle.className = "success";
+          checkUpdatesBtn.disabled = false;
+          checkUpdatesBtn.click(); // re-check to show new versions
+        }
+      } else if (!allOk) {
+        updatesTitle.textContent = "Some updates failed";
+        updatesTitle.className = "warn";
         checkUpdatesBtn.disabled = false;
-        updatesTitle.textContent = "Updates applied";
+      } else {
+        updatesTitle.textContent = "All up to date";
+        updatesTitle.className = "success";
+        checkUpdatesBtn.disabled = false;
       }
     } catch (err) {
       toast("Update failed: " + err, "error");
