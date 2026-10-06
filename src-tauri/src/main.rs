@@ -507,6 +507,33 @@ fn web_dist_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 fn kill_child(child_opt: &mut Option<Child>) {
     if let Some(mut child) = child_opt.take() {
+        let pid = child.id();
+        // Windows: Rust's Child::kill() calls TerminateProcess on
+        // the direct child only. Node sidecars often spawn further
+        // children (worker threads, playwright, native binaries),
+        // which get orphaned on quit and keep listening on 3110.
+        // Use taskkill /T to walk the whole tree.
+        //
+        // Unix: we already install a dedicated process group via
+        // pre_exec(setsid), so killpg handles the tree. That path
+        // was removed when spawn_child was deleted; put it back
+        // inline via libc::killpg since the Child is already in
+        // its own session (we never joined it to ours).
+        #[cfg(windows)]
+        {
+            let _ = std::process::Command::new("taskkill")
+                .args(["/T", "/F", "/PID", &pid.to_string()])
+                .output();
+        }
+        #[cfg(unix)]
+        {
+            // SAFETY: pid comes from Child::id(); kind=negative pid
+            // sends to the whole process group whose leader is pid.
+            // We spawn with setsid so pid is its own pgid.
+            unsafe {
+                libc::killpg(pid as i32, libc::SIGKILL);
+            }
+        }
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -551,11 +578,44 @@ fn spawn_child_logged(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW: don't flash a console window.
+        // CREATE_NEW_PROCESS_GROUP: launcher Ctrl+C doesn't propagate
+        // to the sidecar; also makes taskkill /T semantics clean.
         const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    }
+    #[cfg(unix)]
+    {
+        // setsid: child becomes session leader with pid == pgid, so
+        // killpg(pid, SIGKILL) at shutdown fells every descendant
+        // (Node's workers, playwright, native binaries) at once.
+        // Without this, Quit on macOS leaves Node sidecars owning
+        // 3110 across launcher restarts.
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
     }
 
     let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+
+    // Windows: assign the child to our process-wide Job Object so
+    // the OS tears down the whole tree when the launcher exits
+    // (including crashes / taskmgr force-kill, since the kernel
+    // owns the lifecycle, not us). The job is created once at
+    // startup; see ensure_job_object().
+    #[cfg(windows)]
+    {
+        if let Err(e) = assign_to_launcher_job(&child) {
+            eprintln!("[warn] AssignProcessToJobObject failed: {e}");
+        }
+    }
 
     // Header so a tail of the file shows the latest boot's args.
     {
@@ -987,7 +1047,78 @@ fn open_web_ui(app: tauri::AppHandle, state: State<ProcState>) -> Result<(), Str
 
 // ─── main ───────────────────────────────────────────────────────────
 
+/// Windows-only: a process-wide Job Object configured so every
+/// process assigned to it is killed when the launcher exits (even
+/// via taskmgr /F). Created once at startup; every spawned sidecar
+/// gets added via AssignProcessToJobObject.
+///
+/// We store the HANDLE as a usize in an AtomicU64 so the whole thing
+/// is Send+Sync without requiring a global Mutex<HANDLE>. HANDLE is
+/// a pointer; usize is wide enough on both 32- and 64-bit Windows.
+#[cfg(windows)]
+static LAUNCHER_JOB: std::sync::OnceLock<isize> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+fn ensure_job_object() -> Result<isize, String> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::{
+        CreateJobObjectW, SetInformationJobObject,
+        JobObjectExtendedLimitInformation, JOBOBJECT_BASIC_LIMIT_INFORMATION,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+
+    if let Some(h) = LAUNCHER_JOB.get() {
+        return Ok(*h);
+    }
+    unsafe {
+        let job: HANDLE = CreateJobObjectW(None, windows::core::PCWSTR::null())
+            .map_err(|e| format!("CreateJobObjectW: {e}"))?;
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation = JOBOBJECT_BASIC_LIMIT_INFORMATION {
+            LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            ..Default::default()
+        };
+        SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+        .map_err(|e| format!("SetInformationJobObject: {e}"))?;
+        let raw = job.0 as isize;
+        let _ = LAUNCHER_JOB.set(raw);
+        Ok(raw)
+    }
+}
+
+#[cfg(windows)]
+fn assign_to_launcher_job(child: &Child) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::AssignProcessToJobObject;
+
+    let job_raw = ensure_job_object()?;
+    let job = HANDLE(job_raw as *mut _);
+    let proc_handle = HANDLE(child.as_raw_handle() as *mut _);
+    unsafe {
+        AssignProcessToJobObject(job, proc_handle)
+            .map_err(|e| format!("AssignProcessToJobObject: {e}"))?;
+    }
+    Ok(())
+}
+
 fn main() {
+    // Windows: create the kill-on-close Job Object before any sidecar
+    // can spawn. Failure here is non-fatal — we fall back to taskkill
+    // /T on shutdown, which is less reliable (misses children spawned
+    // after Rust loses track) but still catches the common case.
+    #[cfg(windows)]
+    {
+        if let Err(e) = ensure_job_object() {
+            eprintln!("[warn] launcher Job Object init failed: {e}");
+        }
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
