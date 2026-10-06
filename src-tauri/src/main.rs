@@ -1403,8 +1403,40 @@ fn main() {
                 api.prevent_close();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tianshu-launcher");
+        .build(tauri::generate_context!())
+        .expect("error while building tianshu-launcher")
+        .run(|app, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Kill every sidecar we spawned. Without this, setsid
+                // (Unix) / CREATE_NEW_PROCESS_GROUP (Windows) means
+                // Node sidecars survive the launcher's exit and keep
+                // holding port 3110 forever.
+                let state: State<ProcState> = app.state();
+                {
+                    let mut server = state.server.lock().unwrap();
+                    kill_child(&mut server);
+                }
+                {
+                    let mut bridges = state.bridges.lock().unwrap();
+                    for (_, child) in bridges.iter_mut() {
+                        let pid = child.id();
+                        #[cfg(windows)]
+                        {
+                            let _ = std::process::Command::new("taskkill")
+                                .args(["/T", "/F", "/PID", &pid.to_string()])
+                                .output();
+                        }
+                        #[cfg(unix)]
+                        {
+                            unsafe { libc::killpg(pid as i32, libc::SIGKILL); }
+                        }
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                    bridges.clear();
+                }
+            }
+        });
 }
 
 
