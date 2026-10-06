@@ -382,36 +382,40 @@ fn payload_override_dir(sub: &str) -> PathBuf {
 
 fn launcher_data_dir() -> PathBuf { home_dir().join(".tianshu-launcher") }
 
-/// Write a minimal ~/.tianshu/config.json on first boot so the
-/// freshly-installed server shows all builtin plugins in its UI.
+/// Ensure ~/.tianshu/config.json has every builtin plugin enabled.
 ///
-/// What this writes:
-///   {
-///     "plugins": {
-///       "board":   { "enabled": true },
-///       "cron":    { "enabled": true },
-///       … 14 total…
-///     }
-///   }
+/// Tianshu's mergeConfigs() in packages/server/src/core/config.ts
+/// resolves tenant.plugins over global.plugins — meaning plugins
+/// written to the GLOBAL config.json are inherited by every tenant
+/// that doesn't override them individually. So the launcher's job
+/// is to make sure the global file has a `plugins` key with all
+/// 14 builtins set to `enabled: true`.
 ///
-/// Idempotent: if ~/.tianshu/config.json already exists we leave it
-/// alone so the user's edits persist across launcher restarts.
-/// Likewise if the global config can't be written (permissions,
-/// read-only home) we swallow the error and let the server start
-/// anyway — the user will just see an empty plugin list, which is
-/// no worse than before this fix.
+/// Why this isn't just a one-shot write:
+///   - The CLI setup wizard may have already written config.json
+///     with `models.providers` but no `plugins` field (that's
+///     exactly what Yu's install shows). Replacing the whole file
+///     would wipe his provider API key.
+///   - A previous launcher may have written partial plugins (e.g.
+///     from an older BUILTIN_PLUGINS list). We want to top it up,
+///     not reset.
+///
+/// Strategy: load existing JSON (if any), merge builtin plugin ids
+/// into `plugins` without touching keys already present (so a user
+/// who disabled a plugin stays disabled), write back.
+///
+/// Uses serde_json for safe parse/write-back. Failures are swallowed
+/// so a corrupt config.json doesn't block server start — the user
+/// will just see fewer plugins and can fix by hand.
 fn ensure_default_tianshu_config() -> std::io::Result<()> {
     let tianshu_home = home_dir().join(".tianshu");
     let config_path = tianshu_home.join("config.json");
-    if config_path.exists() {
-        return Ok(());
-    }
     std::fs::create_dir_all(&tianshu_home)?;
 
-    // Mirrors packages/server/builtinConfig/plugins/*/manifest.json.
-    // When a new builtin ships upstream and we don't add it here, it
-    // simply stays disabled by default until the user turns it on —
-    // not a crash. So this list drifting mildly is tolerable.
+    // Mirrors the on-disk layout of
+    // packages/server/builtinConfig/plugins/*/manifest.json.
+    // New builtins shipped upstream that aren't in this list simply
+    // stay disabled by default; not a crash.
     const BUILTIN_PLUGINS: &[&str] = &[
         "board",
         "cron",
@@ -429,18 +433,38 @@ fn ensure_default_tianshu_config() -> std::io::Result<()> {
         "workforce-studio",
     ];
 
-    // Hand-rolled JSON so we don't take on serde_json just for this.
-    // Order is deterministic (declared order above) so the file reads
-    // the same across platforms.
-    let mut body = String::from("{\n  \"plugins\": {\n");
-    for (i, id) in BUILTIN_PLUGINS.iter().enumerate() {
-        let comma = if i + 1 == BUILTIN_PLUGINS.len() { "" } else { "," };
-        body.push_str(&format!(
-            "    \"{id}\": {{ \"enabled\": true }}{comma}\n"
-        ));
+    use serde_json::{json, Map, Value};
+
+    let mut root: Value = if config_path.exists() {
+        let bytes = std::fs::read(&config_path)?;
+        serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::Object(Map::new()))
+    } else {
+        Value::Object(Map::new())
+    };
+    if !root.is_object() {
+        root = Value::Object(Map::new());
     }
-    body.push_str("  }\n}\n");
-    std::fs::write(&config_path, body)?;
+    let obj = root.as_object_mut().expect("root is object");
+    let plugins_entry = obj
+        .entry("plugins")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !plugins_entry.is_object() {
+        *plugins_entry = Value::Object(Map::new());
+    }
+    let plugins_obj = plugins_entry.as_object_mut().expect("plugins is object");
+    let mut dirty = false;
+    for id in BUILTIN_PLUGINS {
+        if !plugins_obj.contains_key(*id) {
+            plugins_obj.insert((*id).into(), json!({ "enabled": true }));
+            dirty = true;
+        }
+    }
+    if !dirty {
+        return Ok(());
+    }
+    let serialised = serde_json::to_vec_pretty(&root)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    std::fs::write(&config_path, serialised)?;
     Ok(())
 }
 
