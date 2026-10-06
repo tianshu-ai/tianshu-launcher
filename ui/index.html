@@ -95,6 +95,13 @@
       justify-content: space-between;
       gap: 12px;
     }
+    .card-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .server-card { padding: 14px 14px; }
     .card-info {
       display: flex;
       flex-direction: column;
@@ -152,12 +159,7 @@
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-group { display: flex; gap: 6px; }
 
-    .open-ui-row {
-      margin-top: 10px;
-      margin-bottom: 14px;
-      text-align: center;
-    }
-    .open-ui-row button { padding: 7px 16px; font-size: 13px; }
+
 
     /* Profile edit form */
     .profile-card {
@@ -266,10 +268,13 @@
     .toast.visible { opacity: 1; }
     .toast.error { border-color: var(--danger); color: var(--danger); }
 
-    /* Updates panel — condensed by default, expands on 'Check' */
+    /* Updates panel — secondary surface at the bottom, outside the
+     * main card stack so it reads as metadata rather than primary
+     * content. Collapsed by default; expands on 'Check'. */
     .updates-card {
+      margin-top: 20px;
       padding: 8px 12px;
-      background: var(--surface);
+      background: transparent;
       border: 1px solid var(--border);
       border-radius: 10px;
     }
@@ -326,7 +331,7 @@
     .updates-actions button { font-size: 12px; padding: 4px 12px; }
 
     .footer {
-      margin-top: 20px;
+      margin-top: 14px;
       padding-top: 12px;
       border-top: 1px solid var(--border);
       color: var(--fg-muted);
@@ -349,28 +354,20 @@
 
   <!-- Server tab -->
   <div id="tab-server" class="tab-panel active">
-    <div class="card row">
-      <div class="card-info">
-        <div class="card-title">
-          <span class="dot" id="server-dot"></span>
-          Tianshu Server
+    <div class="card server-card">
+      <div class="card-row">
+        <div class="card-info">
+          <div class="card-title">
+            <span class="dot" id="server-dot"></span>
+            Tianshu Server
+          </div>
+          <div class="card-sub" id="server-sub">Stopped</div>
         </div>
-        <div class="card-sub" id="server-sub">Stopped</div>
+        <div class="btn-group">
+          <button id="server-btn" class="primary">Start</button>
+          <button id="open-ui-btn" disabled>Open →</button>
+        </div>
       </div>
-      <button id="server-btn" class="primary">Start</button>
-    </div>
-
-    <div class="open-ui-row">
-      <button id="open-ui-btn" class="primary" disabled>Open Tianshu →</button>
-    </div>
-
-    <!-- Updates panel -->
-    <div class="updates-card">
-      <div class="updates-head">
-        <span id="updates-title">Updates</span>
-        <button id="check-updates-btn">Check for Updates</button>
-      </div>
-      <div id="updates-body" class="updates-body"></div>
     </div>
   </div>
 
@@ -381,6 +378,15 @@
       <button id="add-profile-btn">+ Add Profile</button>
       <button id="paste-profile-btn">📋 Paste from Clipboard</button>
     </div>
+  </div>
+
+  <!-- Updates panel (bottom; collapsed by default) -->
+  <div class="updates-card">
+    <div class="updates-head">
+      <span id="updates-title">Updates</span>
+      <button id="check-updates-btn">Check for Updates</button>
+    </div>
+    <div id="updates-body" class="updates-body"></div>
   </div>
 
   <div class="footer">
