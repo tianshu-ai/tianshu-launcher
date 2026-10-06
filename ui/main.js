@@ -500,6 +500,122 @@
     }
   });
 
+
+  // ─── updates ─────────────────────────────────────────────────
+  //
+  // One button checks all three components (launcher app, embedded
+  // tianshu server, embedded local-bridge). If any has an update, we
+  // show per-component versions with Current → Latest and a single
+  // 'Update All' action. Server/bridge get npm install'd into the
+  // override dir (next spawn picks them up); launcher directs the
+  // user to the GitHub releases page for the new installer.
+
+  const updatesTitle = document.getElementById("updates-title");
+  const updatesBody = document.getElementById("updates-body");
+  const checkUpdatesBtn = document.getElementById("check-updates-btn");
+
+  const COMPONENT_INSTALL_MAP = {
+    "Tianshu Server": { sub: "server", package: "@tianshu-ai/tianshu" },
+    "Local Bridge": { sub: "bridge", package: "@tianshu-ai/local-bridge" },
+    // Launcher doesn't have a 'sub' — it links to the releases page.
+  };
+
+  function renderUpdates(report) {
+    updatesBody.classList.add("visible");
+    updatesBody.innerHTML = "";
+    if (!report) {
+      updatesTitle.textContent = "Updates";
+      return;
+    }
+    report.components.forEach((c) => {
+      const row = document.createElement("div");
+      row.className = "version-row";
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = c.name;
+      row.appendChild(name);
+      const vers = document.createElement("span");
+      vers.className = "vers";
+      if (c.update_available) {
+        vers.innerHTML =
+          c.current + " \u2192 <span class=\"new\">" + c.latest + "</span>";
+      } else {
+        vers.textContent = c.current + (c.latest === c.current ? " (latest)" : "");
+      }
+      row.appendChild(vers);
+      updatesBody.appendChild(row);
+    });
+
+    if (report.any_update) {
+      updatesTitle.textContent = "Updates available";
+      const actions = document.createElement("div");
+      actions.className = "updates-actions";
+      const updateAllBtn = document.createElement("button");
+      updateAllBtn.className = "primary";
+      updateAllBtn.textContent = "Update All";
+      updateAllBtn.addEventListener("click", () => applyUpdates(report));
+      actions.appendChild(updateAllBtn);
+      updatesBody.appendChild(actions);
+    } else {
+      updatesTitle.textContent = "All up to date";
+    }
+  }
+
+  async function applyUpdates(report) {
+    const updates = report.components.filter((c) => c.update_available);
+    if (updates.length === 0) return;
+
+    const launcherUpdate = updates.find((c) => c.name === "Launcher");
+    const payloadUpdates = updates.filter((c) => c.name !== "Launcher");
+
+    checkUpdatesBtn.disabled = true;
+    updatesTitle.textContent = "Updating\u2026";
+    updatesBody.innerHTML = "<div class=\"empty\">Installing. This can take a minute.</div>";
+
+    try {
+      for (const c of payloadUpdates) {
+        const spec = COMPONENT_INSTALL_MAP[c.name];
+        if (!spec) continue;
+        await invoke("update_payload", { sub: spec.sub, package: spec.package });
+      }
+      if (launcherUpdate) {
+        toast("Launcher update: install new .dmg/.msi from GitHub Releases");
+      }
+      if (payloadUpdates.length > 0) {
+        toast("Restarting to apply updates\u2026");
+        await new Promise((r) => setTimeout(r, 800));
+        await invoke("restart_launcher");
+      } else {
+        checkUpdatesBtn.disabled = false;
+        updatesTitle.textContent = "Updates applied";
+      }
+    } catch (err) {
+      toast("Update failed: " + err, "error");
+      console.error(err);
+      checkUpdatesBtn.disabled = false;
+      updatesTitle.textContent = "Update failed";
+    }
+  }
+
+  checkUpdatesBtn.addEventListener("click", async () => {
+    checkUpdatesBtn.disabled = true;
+    updatesTitle.textContent = "Checking\u2026";
+    updatesBody.classList.add("visible");
+    updatesBody.innerHTML = "<div class=\"empty\">Fetching versions\u2026</div>";
+    try {
+      const report = await invoke("check_updates");
+      renderUpdates(report);
+    } catch (err) {
+      toast("Check failed: " + err, "error");
+      console.error(err);
+      updatesTitle.textContent = "Check failed";
+      updatesBody.innerHTML = "<div class=\"empty\">" + err + "</div>";
+    } finally {
+      checkUpdatesBtn.disabled = false;
+    }
+  });
+
+
   // ─── wire up ────────────────────────────────────────────────────
 
   listen("status-changed", () => {

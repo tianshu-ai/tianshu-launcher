@@ -328,7 +328,20 @@ fn node_sidecar_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Where the bundled payload (server + bridge) lives.
+/// Resolve the payload entry for 'server' or 'bridge', preferring the
+/// user's override directory (~/.tianshu-launcher/overrides/<sub>/
+/// index.js) when it exists. That's how runtime payload upgrades
+/// work: 'Check for Updates' writes a fresh npm install into the
+/// override location, and subsequent spawns pick it up without
+/// re-bundling the launcher.
 fn resource_payload_path(app: &tauri::AppHandle, sub: &str) -> Result<PathBuf, String> {
+    // 1. Prefer runtime-installed override.
+    let override_entry = payload_override_dir(sub).join("index.js");
+    if override_entry.exists() {
+        return Ok(override_entry);
+    }
+
+    // 2. Bundled resource dir (production install).
     let base = app
         .path()
         .resource_dir()
@@ -337,7 +350,8 @@ fn resource_payload_path(app: &tauri::AppHandle, sub: &str) -> Result<PathBuf, S
     if candidate.exists() {
         return Ok(candidate);
     }
-    // Dev-mode fallback: resources/ isn't copied to target/debug.
+
+    // 3. Dev-mode fallback: resources/ isn't copied to target/debug.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(src_tauri) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
             let dev = src_tauri.join("resources").join(sub).join("index.js");
@@ -347,6 +361,27 @@ fn resource_payload_path(app: &tauri::AppHandle, sub: &str) -> Result<PathBuf, S
         }
     }
     Err(format!("payload entry not found: {candidate:?}"))
+}
+
+/// Where runtime-installed payload lives. Separate from bundled
+/// resources so a reinstall of the launcher never clobbers the user's
+/// upgraded tianshu/bridge versions, and uninstalling the launcher
+/// doesn't nuke a known-good override.
+fn payload_override_dir(sub: &str) -> PathBuf {
+    launcher_data_dir().join("overrides").join(sub)
+}
+
+fn launcher_data_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Ok(p) = std::env::var("USERPROFILE") {
+            return PathBuf::from(p).join(".tianshu-launcher");
+        }
+    }
+    if let Ok(p) = std::env::var("HOME") {
+        return PathBuf::from(p).join(".tianshu-launcher");
+    }
+    PathBuf::from(".tianshu-launcher")
 }
 
 fn rustc_target_triple() -> &'static str {
@@ -469,6 +504,202 @@ fn spawn_bridge_child(
     }
     cmd.spawn().map_err(|e| format!("bridge spawn failed: {e}"))
 }
+
+
+#[derive(Serialize, Clone, Debug)]
+struct ComponentVersion {
+    name: String,
+    current: String,
+    latest: String,
+    update_available: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+struct VersionReport {
+    components: Vec<ComponentVersion>,
+    any_update: bool,
+}
+
+fn read_payload_version(app: &tauri::AppHandle, sub: &str, package: &str) -> String {
+    let entry = match resource_payload_path(app, sub) {
+        Ok(p) => p,
+        Err(_) => return "unknown".to_string(),
+    };
+    let Some(root) = entry.parent() else { return "unknown".to_string() };
+    let pkg_json = root.join("node_modules").join(package).join("package.json");
+    let Ok(content) = std::fs::read_to_string(&pkg_json) else { return "unknown".to_string() };
+    serde_json::from_str::<serde_json::Value>(&content)
+        .ok()
+        .and_then(|v| v.get("version")?.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn fetch_npm_latest(package: &str) -> String {
+    let url = format!("https://registry.npmjs.org/{package}/latest");
+    let out = Command::new("curl").args(["-fsSL", "--max-time", "8", &url]).output();
+    let Ok(out) = out else { return "unknown".to_string() };
+    if !out.status.success() { return "unknown".to_string(); }
+    serde_json::from_slice::<serde_json::Value>(&out.stdout)
+        .ok()
+        .and_then(|v| v.get("version")?.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn fetch_launcher_latest() -> String {
+    let out = Command::new("curl")
+        .args([
+            "-fsSL", "--max-time", "8",
+            "-H", "Accept: application/vnd.github+json",
+            "https://api.github.com/repos/tianshu-ai/tianshu-launcher/releases/latest",
+        ])
+        .output();
+    let Ok(out) = out else { return "unknown".to_string() };
+    if !out.status.success() { return "unknown".to_string(); }
+    serde_json::from_slice::<serde_json::Value>(&out.stdout)
+        .ok()
+        .and_then(|v| v.get("tag_name")?.as_str().map(|s| s.trim_start_matches('v').to_string()))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn is_update_available(current: &str, latest: &str) -> bool {
+    if current == "unknown" || latest == "unknown" || current == latest { return false; }
+    let parse = |v: &str| -> (Vec<u64>, bool) {
+        let (base, pre) = v.split_once('-').map_or((v, ""), |(a, b)| (a, b));
+        let nums = base.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect();
+        (nums, !pre.is_empty())
+    };
+    let (cur_n, cur_pre) = parse(current);
+    let (lat_n, lat_pre) = parse(latest);
+    match lat_n.cmp(&cur_n) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => cur_pre && !lat_pre,
+    }
+}
+
+#[tauri::command]
+async fn check_updates(app: tauri::AppHandle) -> Result<VersionReport, String> {
+    let launcher_current = env!("CARGO_PKG_VERSION").to_string();
+    let tianshu_current = read_payload_version(&app, "server", "@tianshu-ai/tianshu");
+    let bridge_current = read_payload_version(&app, "bridge", "@tianshu-ai/local-bridge");
+    let (launcher_latest, tianshu_latest, bridge_latest) = tauri::async_runtime::spawn_blocking(|| {
+        (fetch_launcher_latest(), fetch_npm_latest("@tianshu-ai/tianshu"), fetch_npm_latest("@tianshu-ai/local-bridge"))
+    }).await.map_err(|e| format!("version probe failed: {e}"))?;
+    let components = vec![
+        ComponentVersion {
+            name: "Launcher".to_string(),
+            update_available: is_update_available(&launcher_current, &launcher_latest),
+            current: launcher_current, latest: launcher_latest,
+        },
+        ComponentVersion {
+            name: "Tianshu Server".to_string(),
+            update_available: is_update_available(&tianshu_current, &tianshu_latest),
+            current: tianshu_current, latest: tianshu_latest,
+        },
+        ComponentVersion {
+            name: "Local Bridge".to_string(),
+            update_available: is_update_available(&bridge_current, &bridge_latest),
+            current: bridge_current, latest: bridge_latest,
+        },
+    ];
+    let any_update = components.iter().any(|c| c.update_available);
+    Ok(VersionReport { components, any_update })
+}
+
+#[tauri::command]
+async fn update_payload(sub: String, package: String) -> Result<(), String> {
+    if sub != "server" && sub != "bridge" {
+        return Err(format!("unknown payload component: {sub}"));
+    }
+    tauri::async_runtime::spawn_blocking(move || install_payload_override(&sub, &package))
+        .await
+        .map_err(|e| format!("update_payload join: {e}"))??;
+    Ok(())
+}
+
+fn install_payload_override(sub: &str, package: &str) -> Result<(), String> {
+    let override_dir = payload_override_dir(sub);
+    let tmp = override_dir.with_file_name(format!("{sub}.tmp.{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("mkdir tmp: {e}"))?;
+    std::fs::write(tmp.join("package.json"), serde_json::json!({"name":"x","private":true}).to_string())
+        .map_err(|e| format!("write package.json: {e}"))?;
+
+    let out = Command::new("npm")
+        .args(["install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps", &format!("{package}@latest")])
+        .current_dir(&tmp)
+        .output()
+        .map_err(|e| format!("npm install: {e} (is npm on PATH?)"))?;
+    if !out.status.success() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(format!("npm install failed: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+
+    let pkg_dir = tmp.join("node_modules").join(package);
+    if !pkg_dir.exists() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(format!("installed package not found at {pkg_dir:?}"));
+    }
+
+    let bin_rel = if sub == "server" {
+        pkg_dir.join("packages/server/dist/index.js")
+    } else {
+        let pkg_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(pkg_dir.join("package.json")).unwrap_or_default()
+        ).unwrap_or(serde_json::Value::Null);
+        let bin = pkg_json.get("bin").and_then(|b| match b {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Object(m) => m.values().next().and_then(|v| v.as_str().map(|s| s.to_string())),
+            _ => None,
+        }).unwrap_or_else(|| "dist/index.js".to_string());
+        pkg_dir.join(&bin)
+    };
+    if !bin_rel.exists() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(format!("entry not found: {bin_rel:?}"));
+    }
+
+    let rel = bin_rel.strip_prefix(&tmp).map_err(|e| format!("strip_prefix: {e}"))?;
+    let shim = format!("import \"./{}\";\n", rel.to_string_lossy().replace('\\', "/"));
+    std::fs::write(tmp.join("index.js"), shim).map_err(|e| format!("write shim: {e}"))?;
+    std::fs::write(
+        tmp.join("package.json"),
+        serde_json::json!({"name": format!("tianshu-{sub}-override"), "private": true, "type": "module"}).to_string(),
+    ).map_err(|e| format!("write override package.json: {e}"))?;
+
+    if override_dir.exists() {
+        let backup = override_dir.with_file_name(format!("{sub}.old.{}", std::process::id()));
+        std::fs::rename(&override_dir, &backup).map_err(|e| format!("backup rename: {e}"))?;
+        if let Err(e) = std::fs::rename(&tmp, &override_dir) {
+            let _ = std::fs::rename(&backup, &override_dir);
+            return Err(format!("swap rename: {e}"));
+        }
+        let _ = std::fs::remove_dir_all(&backup);
+    } else {
+        if let Some(parent) = override_dir.parent() { let _ = std::fs::create_dir_all(parent); }
+        std::fs::rename(&tmp, &override_dir).map_err(|e| format!("swap rename: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn restart_launcher(app: tauri::AppHandle, state: State<ProcState>) {
+    // Mirror the tray's Quit handler: kill server + every bridge child
+    // before exiting so a stale shim doesn't survive to squat on 3110.
+    {
+        let mut server = state.server.lock().unwrap();
+        kill_child(&mut server);
+    }
+    {
+        let mut bridges = state.bridges.lock().unwrap();
+        for (_, mut child) in bridges.drain() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    app.exit(0);
+}
+
 
 // ─── Tauri commands (invoked from UI) ───────────────────────────────
 
@@ -873,7 +1104,10 @@ fn main() {
             save_bridge_profiles,
             bridge_status,
             start_bridge_profile,
-            stop_bridge_profile
+            stop_bridge_profile,
+            check_updates,
+            update_payload,
+            restart_launcher
         ])
         .on_window_event(|window, event| {
             // Hide window on close instead of quitting; tray stays alive.
