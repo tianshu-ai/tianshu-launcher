@@ -1,0 +1,219 @@
+#!/usr/bin/env node
+// Prepare the bundled payload for the launcher app:
+//   1. resources/server/  ← @tianshu-ai/tianshu + its production
+//      node_modules (the full server/UI stack).
+//   2. resources/bridge/  ← @tianshu-ai/local-bridge + its production
+//      node_modules (optional sidecar for Local Bridge mode).
+//   3. src-tauri/binaries/node-<target-triple>[.exe] ← Node runtime
+//      sidecar via Tauri's externalBin convention.
+//
+// Mirrors bridge-desktop's prepare-payload.mjs; the diff is one extra
+// payload (the server), which bloats install size — but Yu chose
+// bundling over launcher-download mode for offline/zero-friction setup.
+//
+// Usage:
+//   node scripts/prepare-payload.mjs [--server-version <semver|latest>]
+//                                    [--bridge-version <semver|latest>]
+//                                    [--node-version v22.x.y]
+
+import { execSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import https from "node:https";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(here, "..");
+const srcTauri = path.join(root, "src-tauri");
+
+const args = process.argv.slice(2);
+function argOf(name, def) {
+  const i = args.indexOf(name);
+  return i >= 0 && args[i + 1] ? args[i + 1] : def;
+}
+const SERVER_VERSION = argOf("--server-version", "latest");
+const BRIDGE_VERSION = argOf("--bridge-version", "latest");
+const NODE_VERSION = argOf("--node-version", process.version);
+
+// ─── target triple (matches rustc / Tauri externalBin naming) ───────
+
+function rustTargetTriple() {
+  if (process.env.TARGET_TRIPLE) return process.env.TARGET_TRIPLE;
+  try {
+    const out = execSync("rustc -vV", { encoding: "utf8" });
+    const m = out.match(/host:\s*(\S+)/);
+    if (m) return m[1];
+  } catch { /* fall through */ }
+  const p = process.platform;
+  const a = process.arch;
+  if (p === "darwin") return a === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+  if (p === "win32") return "x86_64-pc-windows-msvc";
+  return a === "arm64" ? "aarch64-unknown-linux-gnu" : "x86_64-unknown-linux-gnu";
+}
+
+// ─── payload installers ─────────────────────────────────────────────
+
+/** Install an npm package + its production deps into resources/<name>/.
+ *  Writes an ESM shim entry so the sidecar can `node index.js`. */
+function installPackagePayload(subdir, spec, label) {
+  const dest = path.join(srcTauri, "resources", subdir);
+  fs.rmSync(dest, { recursive: true, force: true });
+  fs.mkdirSync(dest, { recursive: true });
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), `${subdir}-payload-`));
+  console.log(`[payload] installing ${spec} \u2026`);
+  fs.writeFileSync(
+    path.join(tmp, "package.json"),
+    JSON.stringify({ name: "x", private: true }),
+  );
+  // --legacy-peer-deps mirrors tianshu's root .npmrc so a strict peer
+  // mismatch in a plugin dep doesn't fail the payload bake.
+  execSync(
+    `npm install --omit=dev --no-audit --no-fund --legacy-peer-deps ${spec}`,
+    { cwd: tmp, stdio: "inherit" },
+  );
+
+  // Discover the installed package name from the spec
+  const pkgName = spec.replace(/@[^@/]+$/, ""); // strip trailing @version
+  const pkgDir = path.join(tmp, "node_modules", ...pkgName.split("/"));
+
+  cpDir(path.join(tmp, "node_modules"), path.join(dest, "node_modules"));
+  // Entry shim so Rust can spawn `node index.js` regardless of layout.
+  const binField = readBinField(pkgDir);
+  const binRel = binField
+    ? path.relative(tmp, path.join(pkgDir, binField)).replace(/\\/g, "/")
+    : path.relative(tmp, path.join(pkgDir, "dist", "index.js")).replace(/\\/g, "/");
+  fs.writeFileSync(
+    path.join(dest, "index.js"),
+    `import "./${binRel}";\n`,
+  );
+  fs.writeFileSync(
+    path.join(dest, "package.json"),
+    JSON.stringify(
+      { name: `tianshu-${subdir}-payload`, private: true, type: "module" },
+      null,
+      2,
+    ),
+  );
+  console.log(`[payload] ${label} \u2192 ${dest}`);
+}
+
+function readBinField(pkgDir) {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"));
+    if (!pkg.bin) return undefined;
+    if (typeof pkg.bin === "string") return pkg.bin;
+    // Take the first bin entry
+    const first = Object.values(pkg.bin)[0];
+    return typeof first === "string" ? first : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function cpDir(src, dst) {
+  if (!fs.existsSync(src)) return;
+  fs.cpSync(src, dst, { recursive: true });
+}
+
+// ─── Node sidecar (same download+extract as bridge-desktop) ─────────
+
+async function prepareNode() {
+  const triple = rustTargetTriple();
+  const binDir = path.join(srcTauri, "binaries");
+  fs.mkdirSync(binDir, { recursive: true });
+  const ext = process.platform === "win32" ? ".exe" : "";
+  const destBin = path.join(binDir, `node-${triple}${ext}`);
+
+  const ver = NODE_VERSION.startsWith("v") ? NODE_VERSION : `v${NODE_VERSION}`;
+  const { url, inner } = nodeDownload(ver);
+  console.log(`[payload] fetching Node ${ver} from ${url}`);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "node-dl-"));
+  const archive = path.join(tmp, path.basename(url));
+  await download(url, archive);
+  if (url.endsWith(".zip")) {
+    execSync(`unzip -o -q ${quote(archive)} -d ${quote(tmp)}`);
+  } else {
+    execSync(`tar -xf ${quote(archive)} -C ${quote(tmp)}`);
+  }
+  const extracted = path.join(tmp, inner);
+  fs.copyFileSync(extracted, destBin);
+  if (ext === "") fs.chmodSync(destBin, 0o755);
+  console.log(`[payload] node sidecar \u2192 ${destBin}`);
+}
+
+function nodeBase() {
+  const m = (process.env.NODE_MIRROR || "https://nodejs.org/dist").replace(/\/+$/, "");
+  return m;
+}
+
+function nodeDownload(ver) {
+  const base = nodeBase();
+  const p = process.platform;
+  const a = process.arch;
+  if (p === "win32") {
+    const arch = a === "arm64" ? "arm64" : "x64";
+    return {
+      url: `${base}/${ver}/node-${ver}-win-${arch}.zip`,
+      inner: `node-${ver}-win-${arch}/node.exe`,
+    };
+  }
+  if (p === "darwin") {
+    const arch = a === "arm64" ? "arm64" : "x64";
+    return {
+      url: `${base}/${ver}/node-${ver}-darwin-${arch}.tar.gz`,
+      inner: `node-${ver}-darwin-${arch}/bin/node`,
+    };
+  }
+  const arch = a === "arm64" ? "arm64" : "x64";
+  return {
+    url: `${base}/${ver}/node-${ver}-linux-${arch}.tar.xz`,
+    inner: `node-${ver}-linux-${arch}/bin/node`,
+  };
+}
+
+function download(url, dest) {
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(dest);
+    https
+      .get(url, (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.headers.location) {
+          file.close();
+          download(res.headers.location, dest).then(resolve, reject);
+          return;
+        }
+        if (res.statusCode !== 200) {
+          reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+          return;
+        }
+        res.pipe(file);
+        file.on("finish", () => file.close(() => resolve()));
+      })
+      .on("error", reject);
+  });
+}
+
+function quote(s) {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+// ─── run ────────────────────────────────────────────────────────────
+
+(async () => {
+  installPackagePayload(
+    "server",
+    `@tianshu-ai/tianshu@${SERVER_VERSION}`,
+    "tianshu server",
+  );
+  installPackagePayload(
+    "bridge",
+    `@tianshu-ai/local-bridge@${BRIDGE_VERSION}`,
+    "local-bridge",
+  );
+  await prepareNode();
+  console.log("[payload] done.");
+})().catch((e) => {
+  console.error("[payload] failed:", e);
+  process.exit(1);
+});

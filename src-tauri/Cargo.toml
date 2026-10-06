@@ -1,0 +1,24 @@
+[package]
+name = "tianshu-launcher"
+version = "0.1.0"
+description = "Tianshu Launcher desktop app"
+authors = ["tianshu-ai"]
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-shell = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "tianshu-launcher"
+path = "src/main.rs"

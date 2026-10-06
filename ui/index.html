@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tianshu</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0f1a;
+      --surface: #131a27;
+      --accent: #c9a96e;
+      --fg: #e8e8e8;
+      --fg-muted: #9ca3af;
+      --border: rgba(255, 255, 255, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    h1 {
+      font-size: 22px;
+      font-weight: 600;
+      margin: 0 0 4px 0;
+      color: var(--accent);
+    }
+    .tagline {
+      color: var(--fg-muted);
+      font-size: 13px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .card-info {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .card-title {
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #666;
+      flex-shrink: 0;
+    }
+    .dot.on { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.4); }
+    .card-sub {
+      color: var(--fg-muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+    button {
+      padding: 6px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--fg);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    button:hover { background: rgba(255, 255, 255, 0.04); }
+    button.primary {
+      background: var(--accent);
+      color: #0a0f1a;
+      border-color: var(--accent);
+      font-weight: 500;
+    }
+    button.primary:hover { background: #d4b57e; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .open-ui-row {
+      margin-top: 20px;
+      text-align: center;
+    }
+    .footer {
+      margin-top: 24px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      color: var(--fg-muted);
+      font-size: 11px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>⭐ Tianshu</h1>
+  <div class="tagline">AI agent runtime — self-contained desktop launcher</div>
+
+  <div class="card">
+    <div class="card-info">
+      <div class="card-title">
+        <span class="dot" id="server-dot"></span>
+        Server
+      </div>
+      <div class="card-sub" id="server-sub">Stopped</div>
+    </div>
+    <button id="server-btn" class="primary">Start</button>
+  </div>
+
+  <div class="card">
+    <div class="card-info">
+      <div class="card-title">
+        <span class="dot" id="bridge-dot"></span>
+        Local Bridge
+      </div>
+      <div class="card-sub">Optional — browser/shell for Windows or isolated environments</div>
+    </div>
+    <button id="bridge-btn">Start</button>
+  </div>
+
+  <div class="open-ui-row">
+    <button id="open-ui-btn" class="primary" disabled>Open Tianshu →</button>
+  </div>
+
+  <div class="footer">
+    Config writes to <code id="home-path">~/.tianshu/</code>
+  </div>
+
+  <script type="module">
+    const { invoke } = window.__TAURI__.core;
+    const { listen } = window.__TAURI__.event;
+    const { open } = window.__TAURI__.opener;
+
+    const els = {
+      serverDot: document.getElementById("server-dot"),
+      serverSub: document.getElementById("server-sub"),
+      serverBtn: document.getElementById("server-btn"),
+      bridgeDot: document.getElementById("bridge-dot"),
+      bridgeBtn: document.getElementById("bridge-btn"),
+      openUiBtn: document.getElementById("open-ui-btn"),
+    };
+
+    let state = { server_running: false, bridge_running: false, server_port: 3110 };
+
+    function render() {
+      els.serverDot.classList.toggle("on", state.server_running);
+      els.serverSub.textContent = state.server_running
+        ? `Running on port ${state.server_port}`
+        : "Stopped";
+      els.serverBtn.textContent = state.server_running ? "Stop" : "Start";
+      els.serverBtn.classList.toggle("primary", !state.server_running);
+      els.bridgeDot.classList.toggle("on", state.bridge_running);
+      els.bridgeBtn.textContent = state.bridge_running ? "Stop" : "Start";
+      els.bridgeBtn.classList.toggle("primary", !state.bridge_running);
+      els.openUiBtn.disabled = !state.server_running;
+    }
+
+    async function refresh() {
+      state = await invoke("status");
+      render();
+    }
+
+    els.serverBtn.addEventListener("click", async () => {
+      els.serverBtn.disabled = true;
+      try {
+        state = await invoke(state.server_running ? "stop_server" : "start_server");
+      } catch (err) {
+        alert(`Server error: ${err}`);
+      } finally {
+        els.serverBtn.disabled = false;
+        render();
+      }
+    });
+
+    els.bridgeBtn.addEventListener("click", async () => {
+      els.bridgeBtn.disabled = true;
+      try {
+        state = await invoke(state.bridge_running ? "stop_bridge" : "start_bridge");
+      } catch (err) {
+        alert(`Bridge error: ${err}`);
+      } finally {
+        els.bridgeBtn.disabled = false;
+        render();
+      }
+    });
+
+    els.openUiBtn.addEventListener("click", async () => {
+      await open(`http://localhost:${state.server_port}`);
+    });
+
+    listen("status-changed", refresh);
+    refresh();
+  </script>
+</body>
+</html>
