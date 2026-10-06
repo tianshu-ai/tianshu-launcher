@@ -417,26 +417,6 @@ fn rustc_target_triple() -> &'static str {
 
 // ─── child spawn/kill ───────────────────────────────────────────────
 
-fn spawn_child(
-    node: &PathBuf,
-    entry: &PathBuf,
-    extra_env: &[(&str, PathBuf)],
-) -> Result<Child, String> {
-    let mut cmd = Command::new(node);
-    cmd.arg(entry);
-    for (k, v) in extra_env {
-        cmd.env(k, v);
-    }
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
-    #[cfg(windows)]
-    {
-        // Hide console window on Windows.
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd.spawn().map_err(|e| format!("spawn failed: {e}"))
-}
 
 /// Locate the bundled web UI dist directory next to the server payload.
 /// The @tianshu-ai/tianshu npm package ships packages/web/dist/ as part of
@@ -470,6 +450,83 @@ fn kill_child(child_opt: &mut Option<Child>) {
     }
 }
 
+/// Spawn a child like spawn_child, but hook up stdout+stderr pumps
+/// that write to <launcher_data_dir>/logs/<label>.log. Rotates on
+/// each launch (overwrite) so a crash loop can't fill the disk.
+///
+/// Critical for Windows debugging: tianshu's own log-tee writes to
+/// ~/.tianshu/logs/server-*.log, but if the server crashes during
+/// its module imports (missing native dep, bad path) the log-tee
+/// never gets a chance to install. This gives us a floor-level log.
+fn spawn_child_logged(
+    node: &PathBuf,
+    entry: &PathBuf,
+    extra_env: &[(&str, PathBuf)],
+    label: &str,
+    extra_args: &[String],
+) -> Result<Child, String> {
+    use std::io::{BufRead, BufReader, Write};
+
+    let log_dir = launcher_data_dir().join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join(format!("{label}.log"));
+    let log_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .map_err(|e| format!("open {log_path:?}: {e}"))?;
+
+    let mut cmd = Command::new(node);
+    cmd.arg(entry);
+    for a in extra_args {
+        cmd.arg(a);
+    }
+    for (k, v) in extra_env {
+        cmd.env(k, v);
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+
+    // Header so a tail of the file shows the latest boot's args.
+    {
+        let mut hdr = log_file.try_clone().ok();
+        if let Some(ref mut f) = hdr {
+            let _ = writeln!(
+                f,
+                "=== {label} launched node={node:?} entry={entry:?} args={extra_args:?} env={:?} ===",
+                extra_env.iter().map(|(k, v)| format!("{k}={v:?}")).collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    if let Some(pipe) = child.stdout.take() {
+        let mut sink = log_file.try_clone().map_err(|e| format!("clone: {e}"))?;
+        std::thread::spawn(move || {
+            for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                let _ = writeln!(sink, "[out] {line}");
+            }
+        });
+    }
+    if let Some(pipe) = child.stderr.take() {
+        let mut sink = log_file;
+        std::thread::spawn(move || {
+            for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                let _ = writeln!(sink, "[err] {line}");
+            }
+        });
+    }
+
+    Ok(child)
+}
+
 /// Build the CLI argv for a bridge profile. Must stay in sync with
 /// bridge-desktop's spawn args in its main.rs.
 fn bridge_cli_args(profile: &BridgeProfile) -> Vec<String> {
@@ -499,25 +556,6 @@ fn bridge_cli_args(profile: &BridgeProfile) -> Vec<String> {
     args
 }
 
-fn spawn_bridge_child(
-    node: &PathBuf,
-    entry: &PathBuf,
-    profile: &BridgeProfile,
-) -> Result<Child, String> {
-    let mut cmd = Command::new(node);
-    cmd.arg(entry);
-    cmd.args(bridge_cli_args(profile));
-    cmd.stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    cmd.spawn().map_err(|e| format!("bridge spawn failed: {e}"))
-}
 
 
 #[derive(Serialize, Clone, Debug)]
@@ -738,7 +776,13 @@ fn start_server(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status
     let node = node_sidecar_path(&app)?;
     let entry = resource_payload_path(&app, "server")?;
     let web = web_dist_path(&app)?;
-    let child = spawn_child(&node, &entry, &[("TIANSHU_WEB_DIST", web)])?;
+    let child = spawn_child_logged(
+        &node,
+        &entry,
+        &[("TIANSHU_WEB_DIST", web)],
+        "server",
+        &[],
+    )?;
     *server = Some(child);
     drop(server);
     let _ = app.emit("status-changed", ());
@@ -818,7 +862,15 @@ fn start_bridge_profile(
         .clone();
     let node = node_sidecar_path(&app)?;
     let entry = resource_payload_path(&app, "bridge")?;
-    let child = spawn_bridge_child(&node, &entry, &profile)?;
+    let args = bridge_cli_args(&profile);
+    // Sanitise profile name for a filename: 'My WSS!' -> 'my-wss'.
+    let safe = profile
+        .name
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect::<String>();
+    let label = format!("bridge-{safe}");
+    let child = spawn_child_logged(&node, &entry, &[], &label, &args)?;
     {
         let mut bridges = state.bridges.lock().unwrap();
         if let Some(mut old) = bridges.remove(&id) {
