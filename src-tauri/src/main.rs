@@ -289,42 +289,62 @@ struct Status {
 /// Resources dir (handled by tauri::path::resolve_resource).
 fn node_sidecar_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let triple = rustc_target_triple();
-    let name = if cfg!(windows) {
+    // Tauri 2 is inconsistent about how it ships externalBin on
+    // different OSes / bundlers:
+    //   - macOS .app: Contents/MacOS/node-<triple>  (preserved name)
+    //   - macOS .dmg: same as .app
+    //   - Windows NSIS .exe: node.exe at app root (STRIPS the triple!)
+    //   - Windows MSI: Bin_node.exe at root (prefixed, not what we want)
+    //   - Linux .deb: /usr/lib/<app>/node-<triple>  (preserved)
+    //   - Linux AppImage: node-<triple> next to the launched binary
+    //
+    // So we try several name forms + several roots.
+    let triple_name = if cfg!(windows) {
         format!("node-{triple}.exe")
     } else {
         format!("node-{triple}")
     };
-    // Production: Tauri unpacks externalBin into the resource dir.
-    let base = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("resource_dir: {e}"))?;
-    let candidate = base.join(&name);
-    if candidate.exists() {
-        return Ok(candidate);
+    let plain_name = if cfg!(windows) { "node.exe" } else { "node" };
+
+    let mut tried: Vec<PathBuf> = Vec::new();
+    let probe = |p: PathBuf, out: &mut Vec<PathBuf>| -> Option<PathBuf> {
+        if p.exists() {
+            Some(p)
+        } else {
+            out.push(p);
+            None
+        }
+    };
+
+    // 1. Resource dir (where Tauri says it put resources).
+    if let Ok(base) = app.path().resource_dir() {
+        for name in [triple_name.as_str(), plain_name] {
+            if let Some(hit) = probe(base.join(name), &mut tried) { return Ok(hit); }
+            if let Some(hit) = probe(base.join("binaries").join(name), &mut tried) { return Ok(hit); }
+        }
     }
-    let nested = base.join("binaries").join(&name);
-    if nested.exists() {
-        return Ok(nested);
-    }
-    // Dev-mode fallback: externalBin isn't copied to target/debug.
-    // Walk up from the current exe (target/debug/<app>) to find
-    // src-tauri/binaries/<name>.
+
+    // 2. Alongside the launcher's own exe (NSIS layout: Tauri drops
+    //    node.exe directly next to tianshu-launcher.exe).
     if let Ok(exe) = std::env::current_exe() {
-        // exe = .../src-tauri/target/debug/<app>
-        //                           ^^^ parent = debug
-        //                     ^^^ parent.parent = target
-        //              ^^^ parent.parent.parent = src-tauri
+        if let Some(dir) = exe.parent() {
+            for name in [triple_name.as_str(), plain_name] {
+                if let Some(hit) = probe(dir.join(name), &mut tried) { return Ok(hit); }
+                if let Some(hit) = probe(dir.join("binaries").join(name), &mut tried) { return Ok(hit); }
+            }
+        }
+
+        // 3. Dev-mode: walk up from target/<profile>/<exe> to src-tauri/binaries/.
         if let Some(src_tauri) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
-            let dev = src_tauri.join("binaries").join(&name);
-            if dev.exists() {
-                return Ok(dev);
+            for name in [triple_name.as_str(), plain_name] {
+                if let Some(hit) = probe(src_tauri.join("binaries").join(name), &mut tried) {
+                    return Ok(hit);
+                }
             }
         }
     }
-    Err(format!(
-        "node sidecar not found: tried {candidate:?}, {nested:?}, and dev-mode src-tauri/binaries/{name}"
-    ))
+
+    Err(format!("node sidecar not found. Tried: {tried:?}"))
 }
 
 /// Where the bundled payload (server + bridge) lives.
