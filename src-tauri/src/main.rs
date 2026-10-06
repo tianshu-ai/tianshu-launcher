@@ -840,12 +840,27 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Auto-start the server on first launch. User can stop it
-            // from the tray or UI if they don't want it.
+            // Auto-start the server on first launch, plus any bridge
+            // profile that has auto_start=true. User can stop any of
+            // them from the tray or UI if they don't want them running.
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 let state: State<ProcState> = app_handle.state();
                 let _ = start_server(app_handle.clone(), state);
+
+                // Give the server a moment to bind :3110 before auto-
+                // starting any bridge profile that points at it (the
+                // common 'localhost' case). Pure best-effort — the
+                // bridge CLI reconnects on failure anyway.
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                let profiles = load_bridge_config().profiles;
+                for p in profiles {
+                    if !p.auto_start {
+                        continue;
+                    }
+                    let state: State<ProcState> = app_handle.state();
+                    let _ = start_bridge_profile(p.id, app_handle.clone(), state);
+                }
             });
             Ok(())
         })
