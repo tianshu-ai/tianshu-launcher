@@ -501,48 +501,23 @@ fn main() {
             let sep1 = PredefinedMenuItem::separator(app)?;
 
             // Primary actions.
-            let open_settings = MenuItem::with_id(
-                app,
-                "open_settings",
-                "\u{2699}  Settings\u{2026}",
-                true,
-                None::<&str>,
-            )?;
-            let open_ui = MenuItem::with_id(
-                app,
-                "open_ui",
-                "\u{1f310}  Open Tianshu Web UI",
-                true,
-                None::<&str>,
-            )?;
-            let open_config = MenuItem::with_id(
-                app,
-                "open_config",
-                "\u{1f4c2}  Open Config Folder",
-                true,
-                None::<&str>,
-            )?;
+            let open_settings =
+                MenuItem::with_id(app, "open_settings", "Settings\u{2026}", true, None::<&str>)?;
+            let open_ui =
+                MenuItem::with_id(app, "open_ui", "Open Web UI", true, None::<&str>)?;
+            let open_config =
+                MenuItem::with_id(app, "open_config", "Open Config Folder", true, None::<&str>)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
 
             // Server submenu.
-            let toggle_server = MenuItem::with_id(
-                app,
-                "toggle_server",
-                "\u{25b6}  Start Server",
-                true,
-                None::<&str>,
-            )?;
-            let restart_server = MenuItem::with_id(
-                app,
-                "restart_server",
-                "\u{1f501}  Restart Server",
-                true,
-                None::<&str>,
-            )?;
+            let toggle_server =
+                MenuItem::with_id(app, "toggle_server", "Start Server", true, None::<&str>)?;
+            let restart_server =
+                MenuItem::with_id(app, "restart_server", "Restart Server", true, None::<&str>)?;
             let server_submenu = Submenu::with_id_and_items(
                 app,
                 "server_submenu",
-                "\u{1f5a5}\u{fe0f}  Server",
+                "Server",
                 true,
                 &[&toggle_server, &restart_server],
             )?;
@@ -551,33 +526,28 @@ fn main() {
             let manage_bridge = MenuItem::with_id(
                 app,
                 "manage_bridge",
-                "\u{2699}  Manage Profiles\u{2026}",
+                "Manage Profiles\u{2026}",
                 true,
                 None::<&str>,
             )?;
             let stop_all_bridges = MenuItem::with_id(
                 app,
                 "stop_all_bridges",
-                "\u{23f9}  Stop All Bridges",
+                "Stop All Bridges",
                 true,
                 None::<&str>,
             )?;
             let bridge_submenu = Submenu::with_id_and_items(
                 app,
                 "bridge_submenu",
-                "\u{1f309}  Local Bridge",
+                "Local Bridge",
                 true,
                 &[&manage_bridge, &stop_all_bridges],
             )?;
 
             let sep3 = PredefinedMenuItem::separator(app)?;
-            let quit = MenuItem::with_id(
-                app,
-                "quit",
-                "\u{23fb}  Quit Tianshu",
-                true,
-                None::<&str>,
-            )?;
+            let quit =
+                MenuItem::with_id(app, "quit", "Quit Tianshu", true, None::<&str>)?;
 
             let menu = Menu::with_items(
                 app,
