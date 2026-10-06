@@ -523,6 +523,7 @@
   function renderUpdates(report) {
     updatesBody.classList.add("visible");
     updatesBody.innerHTML = "";
+    updatesTitle.className = "";
     if (!report) {
       updatesTitle.textContent = "Updates";
       return;
@@ -539,8 +540,12 @@
       if (c.update_available) {
         vers.innerHTML =
           c.current + " \u2192 <span class=\"new\">" + c.latest + "</span>";
+      } else if (c.latest === "unknown") {
+        // Offline, or GitHub release doesn't exist yet (first launch
+        // before v1.0.0).
+        vers.innerHTML = c.current + " <span class=\"tag\">\u2014</span>";
       } else {
-        vers.textContent = c.current + (c.latest === c.current ? " (latest)" : "");
+        vers.innerHTML = c.current + " <span class=\"tag\">latest</span>";
       }
       row.appendChild(vers);
       updatesBody.appendChild(row);
@@ -548,6 +553,7 @@
 
     if (report.any_update) {
       updatesTitle.textContent = "Updates available";
+      updatesTitle.className = "warn";
       const actions = document.createElement("div");
       actions.className = "updates-actions";
       const updateAllBtn = document.createElement("button");
@@ -558,6 +564,7 @@
       updatesBody.appendChild(actions);
     } else {
       updatesTitle.textContent = "All up to date";
+      updatesTitle.className = "success";
     }
   }
 
