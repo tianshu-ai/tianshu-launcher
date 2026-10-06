@@ -246,10 +246,14 @@
     eLabel.textContent = "Browser";
     engineRow.appendChild(eLabel);
     const sel = document.createElement("select");
+    const engineLabels = {
+      own: "own \u2014 your local Chrome (via CDP)",
+      stealth: "stealth \u2014 CloakBrowser (anti-bot, ~200MB first run)",
+    };
     ["own", "stealth"].forEach((v) => {
       const opt = document.createElement("option");
       opt.value = v;
-      opt.textContent = v === "own" ? "own (bundled Chromium)" : "stealth (user profile)";
+      opt.textContent = engineLabels[v];
       if (draft.engine === v) opt.selected = true;
       sel.appendChild(opt);
     });
