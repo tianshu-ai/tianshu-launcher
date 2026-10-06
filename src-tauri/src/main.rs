@@ -30,6 +30,7 @@ use tauri::{
 #[derive(Default)]
 struct TrayItems {
     toggle_server: Mutex<Option<MenuItem<tauri::Wry>>>,
+    start_all_bridges: Mutex<Option<MenuItem<tauri::Wry>>>,
     stop_all_bridges: Mutex<Option<MenuItem<tauri::Wry>>>,
     restart_server: Mutex<Option<MenuItem<tauri::Wry>>>,
     bridge_submenu: Mutex<Option<Submenu<tauri::Wry>>>,
@@ -69,6 +70,20 @@ fn refresh_tray(app: &tauri::AppHandle) {
         }
         if let Some(restart) = items.restart_server.lock().unwrap().as_ref() {
             let _ = restart.set_enabled(server_running);
+        }
+        // Start/Stop All only make sense when there are profiles at
+        // all, and respectively when at least one is NOT running /
+        // IS running.
+        let total_profiles = load_bridge_config().profiles.len();
+        let any_stopped = total_profiles > bridge_count;
+        if let Some(start_all) = items.start_all_bridges.lock().unwrap().as_ref() {
+            let _ = start_all.set_enabled(any_stopped);
+            let stopped_count = total_profiles - bridge_count;
+            let _ = start_all.set_text(if total_profiles > 1 && stopped_count > 1 {
+                format!("Start All Bridges ({stopped_count})")
+            } else {
+                "Start All Bridges".to_string()
+            });
         }
         if let Some(stop_all) = items.stop_all_bridges.lock().unwrap().as_ref() {
             let _ = stop_all.set_enabled(any_bridge);
@@ -155,6 +170,9 @@ fn rebuild_bridge_submenu(
         None::<&str>,
     ) {
         let _ = submenu.append(&manage);
+    }
+    if let Some(start_all) = items.start_all_bridges.lock().unwrap().as_ref() {
+        let _ = submenu.append(start_all);
     }
     if let Some(stop_all) = items.stop_all_bridges.lock().unwrap().as_ref() {
         let _ = submenu.append(stop_all);
@@ -650,6 +668,13 @@ fn main() {
                 true,
                 None::<&str>,
             )?;
+            let start_all_bridges = MenuItem::with_id(
+                app,
+                "start_all_bridges",
+                "Start All Bridges",
+                true,
+                None::<&str>,
+            )?;
             let stop_all_bridges = MenuItem::with_id(
                 app,
                 "stop_all_bridges",
@@ -662,7 +687,7 @@ fn main() {
                 "bridge_submenu",
                 "Local Bridge",
                 true,
-                &[&manage_bridge, &stop_all_bridges],
+                &[&manage_bridge, &start_all_bridges, &stop_all_bridges],
             )?;
             // Keep the submenu handle for dynamic per-profile rebuilds.
             // The initial content (manage_bridge + stop_all_bridges)
@@ -695,10 +720,12 @@ fn main() {
             let items: State<TrayItems> = app.state();
             *items.toggle_server.lock().unwrap() = Some(toggle_server.clone());
             *items.restart_server.lock().unwrap() = Some(restart_server.clone());
+            *items.start_all_bridges.lock().unwrap() = Some(start_all_bridges.clone());
             *items.stop_all_bridges.lock().unwrap() = Some(stop_all_bridges.clone());
             *items.bridge_submenu.lock().unwrap() = Some(bridge_submenu.clone());
             // Initial state: no server, no bridges — reflect that.
             let _ = restart_server.set_enabled(false);
+            let _ = start_all_bridges.set_enabled(false);
             let _ = stop_all_bridges.set_enabled(false);
             // Populate per-profile items from config on first launch.
             let profiles = load_bridge_config().profiles;
@@ -760,6 +787,24 @@ fn main() {
                         std::thread::sleep(std::time::Duration::from_millis(300));
                         let state: State<ProcState> = app.state();
                         let _ = start_server(app.clone(), state);
+                    }
+                    "start_all_bridges" => {
+                        let profiles = load_bridge_config().profiles;
+                        let state: State<ProcState> = app.state();
+                        let running: std::collections::HashSet<String> = state
+                            .bridges
+                            .lock()
+                            .unwrap()
+                            .keys()
+                            .cloned()
+                            .collect();
+                        for p in profiles {
+                            if running.contains(&p.id) {
+                                continue;
+                            }
+                            let state: State<ProcState> = app.state();
+                            let _ = start_bridge_profile(p.id, app.clone(), state);
+                        }
                     }
                     "stop_all_bridges" => {
                         let state: State<ProcState> = app.state();
