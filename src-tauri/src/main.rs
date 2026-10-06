@@ -53,22 +53,37 @@ fn node_sidecar_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     } else {
         format!("node-{triple}")
     };
-    // Tauri 2 resolves externalBin via resource dir.
+    // Production: Tauri unpacks externalBin into the resource dir.
     let base = app
         .path()
         .resource_dir()
         .map_err(|e| format!("resource_dir: {e}"))?;
-    // externalBin is placed under the resource root, not nested.
     let candidate = base.join(&name);
     if candidate.exists() {
         return Ok(candidate);
     }
-    // Dev-time fallback.
-    let dev = base.join("binaries").join(&name);
-    if dev.exists() {
-        return Ok(dev);
+    let nested = base.join("binaries").join(&name);
+    if nested.exists() {
+        return Ok(nested);
     }
-    Err(format!("node sidecar not found: tried {candidate:?} and {dev:?}"))
+    // Dev-mode fallback: externalBin isn't copied to target/debug.
+    // Walk up from the current exe (target/debug/<app>) to find
+    // src-tauri/binaries/<name>.
+    if let Ok(exe) = std::env::current_exe() {
+        // exe = .../src-tauri/target/debug/<app>
+        //                           ^^^ parent = debug
+        //                     ^^^ parent.parent = target
+        //              ^^^ parent.parent.parent = src-tauri
+        if let Some(src_tauri) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+            let dev = src_tauri.join("binaries").join(&name);
+            if dev.exists() {
+                return Ok(dev);
+            }
+        }
+    }
+    Err(format!(
+        "node sidecar not found: tried {candidate:?}, {nested:?}, and dev-mode src-tauri/binaries/{name}"
+    ))
 }
 
 /// Where the bundled payload (server + bridge) lives.
@@ -77,14 +92,18 @@ fn resource_payload_path(app: &tauri::AppHandle, sub: &str) -> Result<PathBuf, S
         .path()
         .resource_dir()
         .map_err(|e| format!("resource_dir: {e}"))?;
-    // bridge-desktop convention: resources/<sub>/
     let candidate = base.join("resources").join(sub).join("index.js");
     if candidate.exists() {
         return Ok(candidate);
     }
-    let dev = base.join("resources").join(sub).join("index.js");
-    if dev.exists() {
-        return Ok(dev);
+    // Dev-mode fallback: resources/ isn't copied to target/debug.
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(src_tauri) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()) {
+            let dev = src_tauri.join("resources").join(sub).join("index.js");
+            if dev.exists() {
+                return Ok(dev);
+            }
+        }
     }
     Err(format!("payload entry not found: {candidate:?}"))
 }
