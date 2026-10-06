@@ -729,6 +729,85 @@ async fn update_payload(sub: String, package: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Locate npm on the system. Tauri-packaged .exe doesn't inherit the
+/// user's shell PATH, so `Command::new("npm")` fails on Windows where
+/// npm lives in `C:\Program Files\nodejs\` or `%APPDATA%\npm` — neither
+/// of which is on the process's PATH.
+///
+/// Strategy: try the bare name first (works when PATH is inherited,
+/// e.g. `npm run dev`), then probe well-known locations.
+fn find_npm() -> Result<PathBuf, String> {
+    // 1. If npm is on PATH, use it (covers dev mode + Unix + nvm).
+    let bare = if cfg!(windows) { "npm.cmd" } else { "npm" };
+    if let Ok(output) = Command::new(if cfg!(windows) { "where" } else { "which" })
+        .arg(bare)
+        .output()
+    {
+        if output.status.success() {
+            let found = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !found.is_empty() {
+                return Ok(PathBuf::from(found));
+            }
+        }
+    }
+
+    // 2. Windows well-known paths.
+    #[cfg(windows)]
+    {
+        let candidates: Vec<PathBuf> = [
+            std::env::var("ProgramFiles").ok().map(|p| PathBuf::from(p).join("nodejs").join("npm.cmd")),
+            std::env::var("APPDATA").ok().map(|p| PathBuf::from(p).join("npm").join("npm.cmd")),
+            Some(PathBuf::from(r"C:\Program Files\nodejs\npm.cmd")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        for c in &candidates {
+            if c.exists() {
+                return Ok(c.clone());
+            }
+        }
+    }
+
+    // 3. macOS / Linux: nvm, homebrew, system.
+    #[cfg(unix)]
+    {
+        let home = home_dir();
+        let candidates = [
+            home.join(".nvm/versions/node"),  // nvm: pick latest
+            PathBuf::from("/opt/homebrew/bin/npm"),
+            PathBuf::from("/usr/local/bin/npm"),
+            PathBuf::from("/usr/bin/npm"),
+        ];
+        // nvm: find the newest installed version's npm
+        if candidates[0].is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&candidates[0]) {
+                let mut versions: Vec<PathBuf> = entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path().join("bin/npm"))
+                    .filter(|p| p.exists())
+                    .collect();
+                versions.sort();
+                if let Some(latest) = versions.pop() {
+                    return Ok(latest);
+                }
+            }
+        }
+        for c in &candidates[1..] {
+            if c.exists() {
+                return Ok(c.clone());
+            }
+        }
+    }
+
+    Err("npm not found: not on PATH and not in well-known locations. Install Node.js or add npm to PATH.".into())
+}
+
 fn install_payload_override(sub: &str, package: &str) -> Result<(), String> {
     let override_dir = payload_override_dir(sub);
     let tmp = override_dir.with_file_name(format!("{sub}.tmp.{}", std::process::id()));
@@ -737,11 +816,12 @@ fn install_payload_override(sub: &str, package: &str) -> Result<(), String> {
     std::fs::write(tmp.join("package.json"), serde_json::json!({"name":"x","private":true}).to_string())
         .map_err(|e| format!("write package.json: {e}"))?;
 
-    let out = Command::new("npm")
+    let npm = find_npm()?;
+    let out = Command::new(&npm)
         .args(["install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps", &format!("{package}@latest")])
         .current_dir(&tmp)
         .output()
-        .map_err(|e| format!("npm install: {e} (is npm on PATH?)"))?;
+        .map_err(|e| format!("npm install ({npm:?}): {e}"))?;
     if !out.status.success() {
         let _ = std::fs::remove_dir_all(&tmp);
         return Err(format!("npm install failed: {}", String::from_utf8_lossy(&out.stderr)));
