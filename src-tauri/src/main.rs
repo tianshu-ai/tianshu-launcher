@@ -245,18 +245,7 @@ fn gen_id() -> String {
     format!("p_{:x}_{:x}", ms, h.finish() as u32)
 }
 
-fn bridge_config_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        if let Ok(p) = std::env::var("USERPROFILE") {
-            return PathBuf::from(p).join(".tianshu-bridge");
-        }
-    }
-    if let Ok(p) = std::env::var("HOME") {
-        return PathBuf::from(p).join(".tianshu-bridge");
-    }
-    PathBuf::from(".tianshu-bridge")
-}
+fn bridge_config_dir() -> PathBuf { home_dir().join(".tianshu-bridge") }
 
 fn bridge_config_path() -> PathBuf { bridge_config_dir().join("config.json") }
 
@@ -391,17 +380,22 @@ fn payload_override_dir(sub: &str) -> PathBuf {
     launcher_data_dir().join("overrides").join(sub)
 }
 
-fn launcher_data_dir() -> PathBuf {
+fn launcher_data_dir() -> PathBuf { home_dir().join(".tianshu-launcher") }
+
+/// Cross-platform home directory resolver.
+/// Windows uses %USERPROFILE% (HOME is unset in a default install);
+/// macOS/Linux use $HOME. Falls back to '.' only in degenerate setups.
+fn home_dir() -> PathBuf {
     #[cfg(windows)]
     {
         if let Ok(p) = std::env::var("USERPROFILE") {
-            return PathBuf::from(p).join(".tianshu-launcher");
+            return PathBuf::from(p);
         }
     }
     if let Ok(p) = std::env::var("HOME") {
-        return PathBuf::from(p).join(".tianshu-launcher");
+        return PathBuf::from(p);
     }
-    PathBuf::from(".tianshu-launcher")
+    PathBuf::from(".")
 }
 
 fn rustc_target_triple() -> &'static str {
@@ -1018,10 +1012,13 @@ fn main() {
                     }
                     "open_config" => {
                         use tauri_plugin_opener::OpenerExt;
-                        let home = std::env::var("HOME").unwrap_or_default();
+                        let tianshu_dir = home_dir().join(".tianshu");
+                        // Create it if missing so the file manager
+                        // doesn't bail with 'folder does not exist'.
+                        let _ = std::fs::create_dir_all(&tianshu_dir);
                         let _ = app
                             .opener()
-                            .open_path(format!("{home}/.tianshu"), None::<&str>);
+                            .open_path(tianshu_dir.to_string_lossy().to_string(), None::<&str>);
                     }
                     "toggle_server" => {
                         let state: State<ProcState> = app.state();
