@@ -179,6 +179,23 @@ async function prepareNode() {
   fs.copyFileSync(extracted, destBin);
   if (ext === "") fs.chmodSync(destBin, 0o755);
   console.log(`[payload] node sidecar \u2192 ${destBin}`);
+
+  // Also bundle npm from the Node.js distribution so the launcher can
+  // run `node npm-cli.js install` without requiring a system npm/npx.
+  const nodeRoot = path.dirname(path.dirname(extracted)); // e.g. node-v22.x.x-darwin-arm64
+  // On Windows the layout is flat: node-vXX-win-x64/{node.exe, npm, npm.cmd, node_modules/npm/}
+  // On Unix it's: node-vXX-<os>-<arch>/lib/node_modules/npm/
+  const npmSrcUnix = path.join(tmp, inner.split("/")[0], "lib", "node_modules", "npm");
+  const npmSrcWin = path.join(tmp, inner.split("/")[0], "node_modules", "npm");
+  const npmSrc = fs.existsSync(npmSrcUnix) ? npmSrcUnix : npmSrcWin;
+  const npmDest = path.join(srcTauri, "resources", "npm");
+  if (fs.existsSync(npmSrc)) {
+    fs.rmSync(npmDest, { recursive: true, force: true });
+    cpDir(npmSrc, npmDest);
+    console.log(`[payload] npm cli \u2192 ${npmDest}`);
+  } else {
+    console.warn(`[payload] WARN: npm not found in Node distribution at ${npmSrcUnix} or ${npmSrcWin}`);
+  }
 }
 
 function nodeBase() {

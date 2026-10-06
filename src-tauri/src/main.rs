@@ -13,7 +13,7 @@
 extern crate libc;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
@@ -719,14 +719,39 @@ async fn check_updates(app: tauri::AppHandle) -> Result<VersionReport, String> {
 }
 
 #[tauri::command]
-async fn update_payload(sub: String, package: String) -> Result<(), String> {
+async fn update_payload(app: tauri::AppHandle, sub: String, package: String) -> Result<(), String> {
     if sub != "server" && sub != "bridge" {
         return Err(format!("unknown payload component: {sub}"));
     }
-    tauri::async_runtime::spawn_blocking(move || install_payload_override(&sub, &package))
+    let node = node_sidecar_path(&app)?;
+    let npm_cli = bundled_npm_cli(&app)?;
+    tauri::async_runtime::spawn_blocking(move || install_payload_override(&sub, &package, &node, &npm_cli))
         .await
         .map_err(|e| format!("update_payload join: {e}"))??;
     Ok(())
+}
+
+/// Locate the bundled npm-cli.js shipped in resources/npm/.
+fn bundled_npm_cli(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    // Bundled: resources/npm/bin/npm-cli.js
+    let res = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("resource_dir: {e}"))?;
+    let cli = res.join("resources").join("npm").join("bin").join("npm-cli.js");
+    if cli.exists() {
+        return Ok(cli);
+    }
+    // Dev mode: src-tauri/resources/npm/bin/npm-cli.js
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("npm")
+        .join("bin")
+        .join("npm-cli.js");
+    if dev.exists() {
+        return Ok(dev);
+    }
+    Err("bundled npm-cli.js not found in resources/npm/bin/".into())
 }
 
 /// Locate npm on the system. Tauri-packaged .exe doesn't inherit the
@@ -736,6 +761,7 @@ async fn update_payload(sub: String, package: String) -> Result<(), String> {
 ///
 /// Strategy: try the bare name first (works when PATH is inherited,
 /// e.g. `npm run dev`), then probe well-known locations.
+#[allow(dead_code)] // Kept as fallback if bundled npm is unavailable.
 fn find_npm() -> Result<PathBuf, String> {
     // 1. If npm is on PATH, use it (covers dev mode + Unix + nvm).
     let bare = if cfg!(windows) { "npm.cmd" } else { "npm" };
@@ -808,7 +834,7 @@ fn find_npm() -> Result<PathBuf, String> {
     Err("npm not found: not on PATH and not in well-known locations. Install Node.js or add npm to PATH.".into())
 }
 
-fn install_payload_override(sub: &str, package: &str) -> Result<(), String> {
+fn install_payload_override(sub: &str, package: &str, node: &Path, npm_cli: &Path) -> Result<(), String> {
     let override_dir = payload_override_dir(sub);
     let tmp = override_dir.with_file_name(format!("{sub}.tmp.{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
@@ -816,12 +842,28 @@ fn install_payload_override(sub: &str, package: &str) -> Result<(), String> {
     std::fs::write(tmp.join("package.json"), serde_json::json!({"name":"x","private":true}).to_string())
         .map_err(|e| format!("write package.json: {e}"))?;
 
-    let npm = find_npm()?;
-    let out = Command::new(&npm)
+    // Use the bundled node + npm-cli.js. This way the launcher doesn't
+    // need a system npm at all — the node sidecar already ships a full
+    // npm distribution in resources/npm/.
+    // Also inject node's parent dir into PATH so any lifecycle scripts
+    // that use `#!/usr/bin/env node` resolve correctly.
+    let enriched_path = {
+        let sys_path = std::env::var("PATH").unwrap_or_default();
+        match node.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => {
+                let sep = if cfg!(windows) { ";" } else { ":" };
+                format!("{}{sep}{sys_path}", dir.display())
+            }
+            _ => sys_path,
+        }
+    };
+    let out = Command::new(node)
+        .arg(npm_cli)
         .args(["install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps", &format!("{package}@latest")])
         .current_dir(&tmp)
+        .env("PATH", &enriched_path)
         .output()
-        .map_err(|e| format!("npm install ({npm:?}): {e}"))?;
+        .map_err(|e| format!("npm install via bundled node: {e}"))?;
     if !out.status.success() {
         let _ = std::fs::remove_dir_all(&tmp);
         return Err(format!("npm install failed: {}", String::from_utf8_lossy(&out.stderr)));
