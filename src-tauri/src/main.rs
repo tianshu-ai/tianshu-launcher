@@ -19,7 +19,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
     Emitter, Manager, State,
 };
@@ -486,17 +486,113 @@ fn main() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(ProcState::default())
         .setup(|app| {
-            // Minimal tray: Open UI / Toggle Server / Toggle Bridge / Quit.
-            let open_ui = MenuItem::with_id(app, "open_ui", "Open Tianshu", true, None::<&str>)?;
-            let toggle_server =
-                MenuItem::with_id(app, "toggle_server", "Start Server", true, None::<&str>)?;
-            let toggle_bridge =
-                MenuItem::with_id(app, "toggle_bridge", "Start Local Bridge", true, None::<&str>)?;
-            let sep = PredefinedMenuItem::separator(app)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            // Grouped tray menu. Tauri 2 doesn't expose NSMenuItem
+            // image/icon APIs cross-platform, so emoji glyphs in the
+            // label are the only consistent visual cue we have.
+
+            // Header: brand + version, disabled so it reads as a title.
+            let header = MenuItem::with_id(
+                app,
+                "header",
+                format!("Tianshu  v{}", env!("CARGO_PKG_VERSION")),
+                false,
+                None::<&str>,
+            )?;
+            let sep1 = PredefinedMenuItem::separator(app)?;
+
+            // Primary actions.
+            let open_settings = MenuItem::with_id(
+                app,
+                "open_settings",
+                "\u{2699}  Settings\u{2026}",
+                true,
+                None::<&str>,
+            )?;
+            let open_ui = MenuItem::with_id(
+                app,
+                "open_ui",
+                "\u{1f310}  Open Tianshu Web UI",
+                true,
+                None::<&str>,
+            )?;
+            let open_config = MenuItem::with_id(
+                app,
+                "open_config",
+                "\u{1f4c2}  Open Config Folder",
+                true,
+                None::<&str>,
+            )?;
+            let sep2 = PredefinedMenuItem::separator(app)?;
+
+            // Server submenu.
+            let toggle_server = MenuItem::with_id(
+                app,
+                "toggle_server",
+                "\u{25b6}  Start Server",
+                true,
+                None::<&str>,
+            )?;
+            let restart_server = MenuItem::with_id(
+                app,
+                "restart_server",
+                "\u{1f501}  Restart Server",
+                true,
+                None::<&str>,
+            )?;
+            let server_submenu = Submenu::with_id_and_items(
+                app,
+                "server_submenu",
+                "\u{1f5a5}\u{fe0f}  Server",
+                true,
+                &[&toggle_server, &restart_server],
+            )?;
+
+            // Bridge submenu.
+            let manage_bridge = MenuItem::with_id(
+                app,
+                "manage_bridge",
+                "\u{2699}  Manage Profiles\u{2026}",
+                true,
+                None::<&str>,
+            )?;
+            let stop_all_bridges = MenuItem::with_id(
+                app,
+                "stop_all_bridges",
+                "\u{23f9}  Stop All Bridges",
+                true,
+                None::<&str>,
+            )?;
+            let bridge_submenu = Submenu::with_id_and_items(
+                app,
+                "bridge_submenu",
+                "\u{1f309}  Local Bridge",
+                true,
+                &[&manage_bridge, &stop_all_bridges],
+            )?;
+
+            let sep3 = PredefinedMenuItem::separator(app)?;
+            let quit = MenuItem::with_id(
+                app,
+                "quit",
+                "\u{23fb}  Quit Tianshu",
+                true,
+                None::<&str>,
+            )?;
+
             let menu = Menu::with_items(
                 app,
-                &[&open_ui, &toggle_server, &toggle_bridge, &sep, &quit],
+                &[
+                    &header,
+                    &sep1,
+                    &open_settings,
+                    &open_ui,
+                    &open_config,
+                    &sep2,
+                    &server_submenu,
+                    &bridge_submenu,
+                    &sep3,
+                    &quit,
+                ],
             )?;
 
             let icon = tauri::image::Image::from_bytes(ICON_STOPPED)?;
@@ -519,11 +615,24 @@ fn main() {
                         }
                         app.exit(0);
                     }
+                    "open_settings" | "manage_bridge" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
                     "open_ui" => {
                         use tauri_plugin_opener::OpenerExt;
                         let _ = app
                             .opener()
                             .open_url("http://localhost:3110", None::<&str>);
+                    }
+                    "open_config" => {
+                        use tauri_plugin_opener::OpenerExt;
+                        let home = std::env::var("HOME").unwrap_or_default();
+                        let _ = app
+                            .opener()
+                            .open_path(format!("{home}/.tianshu"), None::<&str>);
                     }
                     "toggle_server" => {
                         let state: State<ProcState> = app.state();
@@ -534,12 +643,25 @@ fn main() {
                             let _ = start_server(app.clone(), state);
                         }
                     }
-                    "toggle_bridge" => {
-                        // Open the main window so the user picks a profile.
-                        // Tray can't know which profile to start without UI.
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                    "restart_server" => {
+                        let state: State<ProcState> = app.state();
+                        let _ = stop_server(app.clone(), state);
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        let state: State<ProcState> = app.state();
+                        let _ = start_server(app.clone(), state);
+                    }
+                    "stop_all_bridges" => {
+                        let state: State<ProcState> = app.state();
+                        let ids: Vec<String> = state
+                            .bridges
+                            .lock()
+                            .unwrap()
+                            .keys()
+                            .cloned()
+                            .collect();
+                        for id in ids {
+                            let state: State<ProcState> = app.state();
+                            let _ = stop_bridge_profile(id, app.clone(), state);
                         }
                     }
                     _ => {}
