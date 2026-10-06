@@ -105,6 +105,10 @@
   const listEl = document.getElementById("profile-list");
   const badgeEl = document.getElementById("bridge-badge");
   const addBtn = document.getElementById("add-profile-btn");
+  const pasteBtn = document.getElementById("paste-profile-btn");
+  // Tauri 2 clipboard plugin — may be undefined if plugin isn't loaded,
+  // in which case we fall back to navigator.clipboard (requires focus).
+  const readClipboard = tauri?.clipboardManager?.readText;
   // Edit-state cache so toggling edit mode doesn't reset in-progress
   // field changes while bridge_status polls every few seconds.
   const openEdits = new Set(); // profile ids currently being edited
@@ -353,6 +357,108 @@
       console.error("refreshBridge failed:", err);
     }
   }
+
+  // Parse a Tianshu-bridge invite from clipboard. Accepted formats:
+  //   1. tsbridge://configure?server=wss://...&token=***
+  //   2. {"server":"wss://...","token":"..."}  (any BridgeProfile fields)
+  //   3. wss://host/ws  or  wss://host/ws TOKEN
+  //   4. tsbridge --server wss://host/ws --token TOKEN (full CLI command)
+  function parseInvite(raw) {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    // 1. tsbridge:// URL
+    if (/^tsbridge:\/\//i.test(trimmed)) {
+      try {
+        const u = new URL(trimmed);
+        return {
+          server: u.searchParams.get("server") || "",
+          token: u.searchParams.get("token") || "",
+          device: u.searchParams.get("device") || "",
+        };
+      } catch { return null; }
+    }
+    // 2. JSON
+    if (trimmed.startsWith("{")) {
+      try { return JSON.parse(trimmed); } catch { return null; }
+    }
+    // 3. plain ws(s) url (with optional token after whitespace)
+    if (/^wss?:\/\//i.test(trimmed)) {
+      const parts = trimmed.split(/\s+/);
+      return { server: parts[0], token: parts[1] || "" };
+    }
+    // 4. 'tsbridge --server ... --token ...' style command line
+    if (/tsbridge\b|--server\b/.test(trimmed)) {
+      // Split respecting single/double quotes.
+      const tokens = [];
+      const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+      let m;
+      while ((m = re.exec(trimmed)) !== null) {
+        tokens.push(m[1] ?? m[2] ?? m[3]);
+      }
+      const result = {};
+      const flagMap = { "--server": "server", "--token": "token", "--device": "device" };
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if (flagMap[t] && tokens[i + 1]) {
+          result[flagMap[t]] = tokens[i + 1];
+          i++;
+        } else if (t === "--no-browser") {
+          result.browser = false;
+        } else if (t === "--headless") {
+          result.headless = true;
+        } else if (t === "--shell") {
+          result.shell = true;
+        } else if (t === "--browser-engine" && tokens[i + 1]) {
+          result.engine = tokens[i + 1];
+          i++;
+        }
+      }
+      return result.server ? result : null;
+    }
+    return null;
+  }
+
+  pasteBtn.addEventListener("click", async () => {
+    let raw;
+    try {
+      raw = readClipboard
+        ? await readClipboard()
+        : await navigator.clipboard.readText();
+    } catch (err) {
+      toast("Clipboard unavailable: " + err, "error");
+      return;
+    }
+    const parsed = parseInvite(raw || "");
+    if (!parsed || !parsed.server) {
+      toast("Couldn\u2019t parse \u2014 expected tsbridge:// URL, JSON, wss://, or tsbridge command", "error");
+      return;
+    }
+    // Derive a friendly name from the hostname.
+    let name;
+    try { name = new URL(parsed.server).hostname; }
+    catch { name = parsed.server.slice(0, 32); }
+    const id = "p_" + Date.now().toString(16) + "_" + Math.floor(Math.random() * 0xffffffff).toString(16);
+    const fresh = {
+      id,
+      name,
+      server: parsed.server,
+      token: parsed.token || "",
+      device: parsed.device || "",
+      auto_start: parsed.auto_start ?? true,
+      browser: parsed.browser ?? true,
+      engine: parsed.engine || "own",
+      headless: parsed.headless || false,
+      shell: parsed.shell || false,
+    };
+    profiles.push(fresh);
+    try {
+      await invoke("save_bridge_profiles", { cfg: { profiles } });
+      await refreshBridge();
+      toast("Added " + name + " from clipboard");
+    } catch (err) {
+      toast("Save: " + err, "error");
+    }
+  });
 
   addBtn.addEventListener("click", async () => {
     // Generate a client-side id matching Rust's gen_id format shape.

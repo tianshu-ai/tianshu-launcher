@@ -461,6 +461,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(ProcState::default())
         .setup(|app| {
             // Minimal tray: Open UI / Toggle Server / Toggle Bridge / Quit.
