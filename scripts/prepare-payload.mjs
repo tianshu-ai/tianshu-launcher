@@ -149,7 +149,21 @@ async function prepareNode() {
   const archive = path.join(tmp, path.basename(url));
   await download(url, archive);
   if (url.endsWith(".zip")) {
-    execSync(`unzip -o -q ${quote(archive)} -d ${quote(tmp)}`);
+    // Windows ships tar.exe (bsdtar) in system32 since Windows 10 1803,
+    // which handles zip natively. 'unzip' only exists via Git Bash /
+    // MSYS2 — not something we can rely on. Use PowerShell as a
+    // fallback on older Windows (Expand-Archive).
+    if (process.platform === "win32") {
+      try {
+        execSync(`tar -xf ${quote(archive)} -C ${quote(tmp)}`);
+      } catch {
+        execSync(
+          `powershell -NoProfile -Command "Expand-Archive -Force -Path '${archive.replace(/'/g, "''")}' -DestinationPath '${tmp.replace(/'/g, "''")}'"`,
+        );
+      }
+    } else {
+      execSync(`unzip -o -q ${quote(archive)} -d ${quote(tmp)}`);
+    }
   } else {
     execSync(`tar -xf ${quote(archive)} -C ${quote(tmp)}`);
   }
