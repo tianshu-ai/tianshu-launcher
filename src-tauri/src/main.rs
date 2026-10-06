@@ -382,92 +382,6 @@ fn payload_override_dir(sub: &str) -> PathBuf {
 
 fn launcher_data_dir() -> PathBuf { home_dir().join(".tianshu-launcher") }
 
-/// Ensure ~/.tianshu/config.json has every builtin plugin enabled.
-///
-/// Tianshu's mergeConfigs() in packages/server/src/core/config.ts
-/// resolves tenant.plugins over global.plugins — meaning plugins
-/// written to the GLOBAL config.json are inherited by every tenant
-/// that doesn't override them individually. So the launcher's job
-/// is to make sure the global file has a `plugins` key with all
-/// 14 builtins set to `enabled: true`.
-///
-/// Why this isn't just a one-shot write:
-///   - The CLI setup wizard may have already written config.json
-///     with `models.providers` but no `plugins` field (that's
-///     exactly what Yu's install shows). Replacing the whole file
-///     would wipe his provider API key.
-///   - A previous launcher may have written partial plugins (e.g.
-///     from an older BUILTIN_PLUGINS list). We want to top it up,
-///     not reset.
-///
-/// Strategy: load existing JSON (if any), merge builtin plugin ids
-/// into `plugins` without touching keys already present (so a user
-/// who disabled a plugin stays disabled), write back.
-///
-/// Uses serde_json for safe parse/write-back. Failures are swallowed
-/// so a corrupt config.json doesn't block server start — the user
-/// will just see fewer plugins and can fix by hand.
-fn ensure_default_tianshu_config() -> std::io::Result<()> {
-    let tianshu_home = home_dir().join(".tianshu");
-    let config_path = tianshu_home.join("config.json");
-    std::fs::create_dir_all(&tianshu_home)?;
-
-    // Mirrors the on-disk layout of
-    // packages/server/builtinConfig/plugins/*/manifest.json.
-    // New builtins shipped upstream that aren't in this list simply
-    // stay disabled by default; not a crash.
-    const BUILTIN_PLUGINS: &[&str] = &[
-        "board",
-        "cron",
-        "custom-ui",
-        "datasource",
-        "doctor",
-        "files",
-        "microsandbox",
-        "openshell",
-        "reverse-mcp",
-        "web-search",
-        "wechat",
-        "wiki",
-        "workboard",
-        "workforce-studio",
-    ];
-
-    use serde_json::{json, Map, Value};
-
-    let mut root: Value = if config_path.exists() {
-        let bytes = std::fs::read(&config_path)?;
-        serde_json::from_slice(&bytes).unwrap_or_else(|_| Value::Object(Map::new()))
-    } else {
-        Value::Object(Map::new())
-    };
-    if !root.is_object() {
-        root = Value::Object(Map::new());
-    }
-    let obj = root.as_object_mut().expect("root is object");
-    let plugins_entry = obj
-        .entry("plugins")
-        .or_insert_with(|| Value::Object(Map::new()));
-    if !plugins_entry.is_object() {
-        *plugins_entry = Value::Object(Map::new());
-    }
-    let plugins_obj = plugins_entry.as_object_mut().expect("plugins is object");
-    let mut dirty = false;
-    for id in BUILTIN_PLUGINS {
-        if !plugins_obj.contains_key(*id) {
-            plugins_obj.insert((*id).into(), json!({ "enabled": true }));
-            dirty = true;
-        }
-    }
-    if !dirty {
-        return Ok(());
-    }
-    let serialised = serde_json::to_vec_pretty(&root)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    std::fs::write(&config_path, serialised)?;
-    Ok(())
-}
-
 /// Cross-platform home directory resolver.
 /// Windows uses %USERPROFILE% (HOME is unset in a default install);
 /// macOS/Linux use $HOME. Falls back to '.' only in degenerate setups.
@@ -922,14 +836,9 @@ fn start_server(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status
     let node = node_sidecar_path(&app)?;
     let entry = resource_payload_path(&app, "server")?;
     let web = web_dist_path(&app)?;
-    // Make sure ~/.tianshu/config.json exists with all 14 builtin
-    // plugins enabled before boot — otherwise the UI's
-    // /api/plugins/list returns [] on a fresh install (tenant config
-    // is empty, so every plugin's `enabled !== true` and they get
-    // filtered out). TIANSHU_IGNORE_SETUP keeps server booting past
-    // the 'no LLM provider' check; the user fills that in from the
-    // Settings page after launching.
-    let _ = ensure_default_tianshu_config();
+    // TIANSHU_IGNORE_SETUP lets the server boot even when the user
+    // hasn't run the setup wizard yet — UI's Settings page can then
+    // guide them through adding providers.
     let ignore = PathBuf::from("1");
     let child = spawn_child_logged(
         &node,
