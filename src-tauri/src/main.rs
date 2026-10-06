@@ -382,6 +382,68 @@ fn payload_override_dir(sub: &str) -> PathBuf {
 
 fn launcher_data_dir() -> PathBuf { home_dir().join(".tianshu-launcher") }
 
+/// Write a minimal ~/.tianshu/config.json on first boot so the
+/// freshly-installed server shows all builtin plugins in its UI.
+///
+/// What this writes:
+///   {
+///     "plugins": {
+///       "board":   { "enabled": true },
+///       "cron":    { "enabled": true },
+///       … 14 total…
+///     }
+///   }
+///
+/// Idempotent: if ~/.tianshu/config.json already exists we leave it
+/// alone so the user's edits persist across launcher restarts.
+/// Likewise if the global config can't be written (permissions,
+/// read-only home) we swallow the error and let the server start
+/// anyway — the user will just see an empty plugin list, which is
+/// no worse than before this fix.
+fn ensure_default_tianshu_config() -> std::io::Result<()> {
+    let tianshu_home = home_dir().join(".tianshu");
+    let config_path = tianshu_home.join("config.json");
+    if config_path.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&tianshu_home)?;
+
+    // Mirrors packages/server/builtinConfig/plugins/*/manifest.json.
+    // When a new builtin ships upstream and we don't add it here, it
+    // simply stays disabled by default until the user turns it on —
+    // not a crash. So this list drifting mildly is tolerable.
+    const BUILTIN_PLUGINS: &[&str] = &[
+        "board",
+        "cron",
+        "custom-ui",
+        "datasource",
+        "doctor",
+        "files",
+        "microsandbox",
+        "openshell",
+        "reverse-mcp",
+        "web-search",
+        "wechat",
+        "wiki",
+        "workboard",
+        "workforce-studio",
+    ];
+
+    // Hand-rolled JSON so we don't take on serde_json just for this.
+    // Order is deterministic (declared order above) so the file reads
+    // the same across platforms.
+    let mut body = String::from("{\n  \"plugins\": {\n");
+    for (i, id) in BUILTIN_PLUGINS.iter().enumerate() {
+        let comma = if i + 1 == BUILTIN_PLUGINS.len() { "" } else { "," };
+        body.push_str(&format!(
+            "    \"{id}\": {{ \"enabled\": true }}{comma}\n"
+        ));
+    }
+    body.push_str("  }\n}\n");
+    std::fs::write(&config_path, body)?;
+    Ok(())
+}
+
 /// Cross-platform home directory resolver.
 /// Windows uses %USERPROFILE% (HOME is unset in a default install);
 /// macOS/Linux use $HOME. Falls back to '.' only in degenerate setups.
@@ -776,12 +838,14 @@ fn start_server(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status
     let node = node_sidecar_path(&app)?;
     let entry = resource_payload_path(&app, "server")?;
     let web = web_dist_path(&app)?;
-    // Pass TIANSHU_IGNORE_SETUP so the server boots even when the
-    // user hasn't run `tianshu setup --wizard` yet — a brand-new
-    // launcher install has no ~/.tianshu/config.json and no LLM
-    // provider configured, which otherwise aborts startup. Once
-    // the server is up the user can open the web UI and configure
-    // things from there.
+    // Make sure ~/.tianshu/config.json exists with all 14 builtin
+    // plugins enabled before boot — otherwise the UI's
+    // /api/plugins/list returns [] on a fresh install (tenant config
+    // is empty, so every plugin's `enabled !== true` and they get
+    // filtered out). TIANSHU_IGNORE_SETUP keeps server booting past
+    // the 'no LLM provider' check; the user fills that in from the
+    // Settings page after launching.
+    let _ = ensure_default_tianshu_config();
     let ignore = PathBuf::from("1");
     let child = spawn_child_logged(
         &node,
