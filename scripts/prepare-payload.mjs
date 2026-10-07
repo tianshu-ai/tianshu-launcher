@@ -61,7 +61,17 @@ function rustTargetTriple() {
  *  itself boots the server when run with no args). 'server' forces
  *  dist/index.js — needed for @tianshu-ai/tianshu, whose bin is
  *  'tianshu' (a service manager that prints help without args). */
-function installPackagePayload(subdir, spec, label, entry = "bin") {
+/**
+ * @param {string} subdir   - output directory under resources/
+ * @param {string} spec     - full npm install spec (may contain multiple packages)
+ * @param {string} label    - human label for logs
+ * @param {string} entry    - 'bin' or 'server'
+ * @param {string} [primaryPkg] - the main package to resolve the entry point from.
+ *   When spec installs multiple packages (e.g. "pkg-a @playwright/mcp"), pass
+ *   the primary one here so we don't confuse the combined spec for a path.
+ *   Defaults to stripping @version from spec (works for single-package specs).
+ */
+function installPackagePayload(subdir, spec, label, entry = "bin", primaryPkg) {
   const dest = path.join(srcTauri, "resources", subdir);
   fs.rmSync(dest, { recursive: true, force: true });
   fs.mkdirSync(dest, { recursive: true });
@@ -79,8 +89,10 @@ function installPackagePayload(subdir, spec, label, entry = "bin") {
     { cwd: tmp, stdio: "inherit" },
   );
 
-  // Discover the installed package name from the spec
-  const pkgName = spec.replace(/@[^@/]+$/, ""); // strip trailing @version
+  // Discover the installed package directory. When spec contains multiple
+  // packages ("pkgA @playwright/mcp"), the caller must pass primaryPkg
+  // so we resolve the entry from the right one.
+  const pkgName = primaryPkg ?? spec.replace(/@[^@/]+$/, ""); // strip trailing @version
   const pkgDir = path.join(tmp, "node_modules", ...pkgName.split("/"));
 
   cpDir(path.join(tmp, "node_modules"), path.join(dest, "node_modules"));
@@ -273,6 +285,8 @@ function quote(s) {
     "bridge",
     `@tianshu-ai/local-bridge@${BRIDGE_VERSION} @playwright/mcp@latest`,
     "local-bridge",
+    "bin",
+    "@tianshu-ai/local-bridge",
   );
   await prepareNode();
   console.log("[payload] done.");
