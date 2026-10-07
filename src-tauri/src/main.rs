@@ -646,28 +646,36 @@ fn read_payload_version(app: &tauri::AppHandle, sub: &str, package: &str) -> Str
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn fetch_npm_latest(package: &str) -> String {
+async fn fetch_npm_latest(package: &str) -> String {
     let url = format!("https://registry.npmjs.org/{package}/latest");
-    let out = Command::new("curl").args(["-fsSL", "--max-time", "8", &url]).output();
-    let Ok(out) = out else { return "unknown".to_string() };
-    if !out.status.success() { return "unknown".to_string(); }
-    serde_json::from_slice::<serde_json::Value>(&out.stdout)
+    let Ok(resp) = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+    else {
+        return "unknown".to_string();
+    };
+    resp.json::<serde_json::Value>()
+        .await
         .ok()
         .and_then(|v| v.get("version")?.as_str().map(|s| s.to_string()))
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-fn fetch_launcher_latest() -> String {
-    let out = Command::new("curl")
-        .args([
-            "-fsSL", "--max-time", "8",
-            "-H", "Accept: application/vnd.github+json",
-            "https://api.github.com/repos/tianshu-ai/tianshu-launcher/releases/latest",
-        ])
-        .output();
-    let Ok(out) = out else { return "unknown".to_string() };
-    if !out.status.success() { return "unknown".to_string(); }
-    serde_json::from_slice::<serde_json::Value>(&out.stdout)
+async fn fetch_launcher_latest() -> String {
+    let Ok(resp) = reqwest::Client::new()
+        .get("https://api.github.com/repos/tianshu-ai/tianshu-launcher/releases/latest")
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "tianshu-launcher")
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+    else {
+        return "unknown".to_string();
+    };
+    resp.json::<serde_json::Value>()
+        .await
         .ok()
         .and_then(|v| v.get("tag_name")?.as_str().map(|s| s.trim_start_matches('v').to_string()))
         .unwrap_or_else(|| "unknown".to_string())
@@ -694,9 +702,9 @@ async fn check_updates(app: tauri::AppHandle) -> Result<VersionReport, String> {
     let launcher_current = env!("CARGO_PKG_VERSION").to_string();
     let tianshu_current = read_payload_version(&app, "server", "@tianshu-ai/tianshu");
     let bridge_current = read_payload_version(&app, "bridge", "@tianshu-ai/local-bridge");
-    let (launcher_latest, tianshu_latest, bridge_latest) = tauri::async_runtime::spawn_blocking(|| {
-        (fetch_launcher_latest(), fetch_npm_latest("@tianshu-ai/tianshu"), fetch_npm_latest("@tianshu-ai/local-bridge"))
-    }).await.map_err(|e| format!("version probe failed: {e}"))?;
+    let launcher_latest = fetch_launcher_latest().await;
+    let tianshu_latest = fetch_npm_latest("@tianshu-ai/tianshu").await;
+    let bridge_latest = fetch_npm_latest("@tianshu-ai/local-bridge").await;
     let components = vec![
         ComponentVersion {
             name: "Launcher".to_string(),
