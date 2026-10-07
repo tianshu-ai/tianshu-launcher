@@ -941,28 +941,21 @@ fn restart_launcher(app: tauri::AppHandle, state: State<ProcState>) {
 
 #[tauri::command]
 fn status(state: State<ProcState>) -> Status {
-    let server = state.server.lock().unwrap();
-    let bridges = state.bridges.lock().unwrap();
-    Status {
-        server_running: server.is_some(),
-        bridge_running: !bridges.is_empty(),
-        server_port: 3110, // tianshu default; could be read from config.json later
-    }
+    status_inner(&state)
 }
 
 #[tauri::command]
-fn start_server(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status, String> {
-    let mut server = state.server.lock().unwrap();
-    if server.is_some() {
-        drop(server);
-        return Ok(status(state));
+async fn start_server(app: tauri::AppHandle, state: State<'_, ProcState>) -> Result<Status, String> {
+    {
+        let server = state.server.lock().unwrap();
+        if server.is_some() {
+            drop(server);
+            return Ok(status_inner(&state));
+        }
     }
     let node = node_sidecar_path(&app)?;
     let entry = resource_payload_path(&app, "server")?;
     let web = web_dist_path(&app)?;
-    // TIANSHU_IGNORE_SETUP lets the server boot even when the user
-    // hasn't run the setup wizard yet — UI's Settings page can then
-    // guide them through adding providers.
     let ignore = PathBuf::from("1");
     let child = spawn_child_logged(
         &node,
@@ -974,11 +967,57 @@ fn start_server(app: tauri::AppHandle, state: State<ProcState>) -> Result<Status
         "server",
         &[],
     )?;
-    *server = Some(child);
-    drop(server);
+    {
+        let mut server = state.server.lock().unwrap();
+        *server = Some(child);
+    }
+    // Emit early so UI can show "Starting…" immediately.
+    let _ = app.emit("server-starting", ());
+    refresh_tray(&app);
+
+    // Wait for port 3110 to accept connections (up to 30s).
+    let ready = wait_for_port(3110, std::time::Duration::from_secs(30)).await;
+    if !ready {
+        // Server process may have crashed — check if still alive.
+        let mut server = state.server.lock().unwrap();
+        if let Some(ref mut child) = *server {
+            match child.try_wait() {
+                Ok(Some(_)) => { *server = None; } // exited
+                _ => {} // still running, port just slow
+            }
+        }
+    }
     let _ = app.emit("status-changed", ());
     refresh_tray(&app);
-    Ok(status(state))
+    Ok(status_inner(&state))
+}
+
+/// Non-command status helper (avoids move issues with State).
+fn status_inner(state: &ProcState) -> Status {
+    let server = state.server.lock().unwrap();
+    let bridges = state.bridges.lock().unwrap();
+    Status {
+        server_running: server.is_some(),
+        bridge_running: !bridges.is_empty(),
+        server_port: 3110,
+    }
+}
+
+/// Poll a TCP port until it accepts a connection or timeout expires.
+async fn wait_for_port(port: u16, timeout: std::time::Duration) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        let start = std::time::Instant::now();
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        while start.elapsed() < timeout {
+            match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200)) {
+                Ok(_) => return true,
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(500)),
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[tauri::command]

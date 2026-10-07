@@ -54,14 +54,21 @@
   };
   let serverState = { server_running: false, bridge_running: false, server_port: 3110 };
 
+  let serverStarting = false;
+
   function renderServer() {
-    serverEls.dot.classList.toggle("on", serverState.server_running);
-    serverEls.sub.textContent = serverState.server_running
-      ? "Running on port " + serverState.server_port
-      : "Stopped";
-    serverEls.btn.textContent = serverState.server_running ? "Stop" : "Start";
-    serverEls.btn.classList.toggle("primary", !serverState.server_running);
-    serverEls.openBtn.disabled = !serverState.server_running;
+    const running = serverState.server_running;
+    serverEls.dot.classList.toggle("on", running);
+    serverEls.dot.classList.toggle("starting", serverStarting);
+    serverEls.sub.textContent = serverStarting
+      ? "Starting\u2026 waiting for port " + serverState.server_port
+      : running
+        ? "Running on port " + serverState.server_port
+        : "Stopped";
+    serverEls.btn.textContent = serverStarting ? "Starting\u2026" : running ? "Stop" : "Start";
+    serverEls.btn.classList.toggle("primary", !running && !serverStarting);
+    serverEls.btn.disabled = serverStarting;
+    serverEls.openBtn.disabled = !running || serverStarting;
   }
 
   async function refreshServer() {
@@ -74,15 +81,37 @@
   }
 
   serverEls.btn.addEventListener("click", async () => {
-    serverEls.btn.disabled = true;
-    try {
-      serverState = await invoke(serverState.server_running ? "stop_server" : "start_server");
-    } catch (err) {
-      toast("Server: " + err, "error");
-      console.error(err);
-    } finally {
-      serverEls.btn.disabled = false;
+    if (serverStarting) return;
+    if (!serverState.server_running) {
+      // Starting: show intermediate state immediately
+      serverStarting = true;
       renderServer();
+      try {
+        serverState = await invoke("start_server");
+        if (serverState.server_running) {
+          toast("Server ready on port " + serverState.server_port);
+        } else {
+          toast("Server failed to start", "error");
+        }
+      } catch (err) {
+        toast("Server: " + err, "error");
+        console.error(err);
+      } finally {
+        serverStarting = false;
+        renderServer();
+      }
+    } else {
+      // Stopping
+      serverEls.btn.disabled = true;
+      try {
+        serverState = await invoke("stop_server");
+      } catch (err) {
+        toast("Server: " + err, "error");
+        console.error(err);
+      } finally {
+        serverEls.btn.disabled = false;
+        renderServer();
+      }
     }
   });
 
