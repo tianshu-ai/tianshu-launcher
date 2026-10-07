@@ -33,6 +33,7 @@ fn strip_unc_prefix(p: PathBuf) -> PathBuf {
 fn strip_unc_prefix(p: PathBuf) -> PathBuf { p }
 
 use serde::{Deserialize, Serialize};
+use tauri_plugin_updater::UpdaterExt;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::TrayIconBuilder,
@@ -775,6 +776,22 @@ async fn update_payload(app: tauri::AppHandle, sub: String, package: String) -> 
     Ok(())
 }
 
+#[tauri::command]
+async fn update_launcher(app: tauri::AppHandle) -> Result<String, String> {
+    let updater = app.updater_builder().build().map_err(|e| format!("updater init: {e}"))?;
+    let update = updater.check().await.map_err(|e| format!("check: {e}"))?;
+    match update {
+        Some(up) => {
+            let version = up.version.clone();
+            println!("[launcher] downloading update v{version}...");
+            up.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("install: {e}"))?;
+            println!("[launcher] update v{version} installed, restart required");
+            Ok(format!("Updated to {version}. Restarting..."))
+        }
+        None => Ok("Already up to date".into()),
+    }
+}
+
 /// Locate the bundled npm-cli.js shipped in resources/npm/.
 fn bundled_npm_cli(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     // Bundled: resources/npm/bin/npm-cli.js
@@ -1300,6 +1317,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ProcState::default())
         .manage(TrayItems::default())
         .setup(|app| {
@@ -1558,6 +1576,7 @@ fn main() {
             stop_bridge_profile,
             check_updates,
             update_payload,
+            update_launcher,
             restart_launcher
         ])
         .on_window_event(|window, event| {

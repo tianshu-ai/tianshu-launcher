@@ -667,14 +667,25 @@
         }
       }
       if (launcherUpdate) {
-        addLine(
-          "Launcher: download new version from GitHub Releases",
-          "info"
+        const launcherRow = addLine(
+          "Launcher: downloading " + (launcherUpdate.latest || "latest") + "\u2026",
+          "pending"
         );
+        try {
+          await invoke("update_launcher");
+          updateLine(
+            launcherRow,
+            "Launcher: \u2713 updated to " + (launcherUpdate.latest || "latest") + " \u2014 restarting\u2026",
+            "ok"
+          );
+        } catch (err) {
+          updateLine(launcherRow, "Launcher: \u2717 " + err, "fail");
+          allOk = false;
+        }
       }
 
-      if (allOk && payloadUpdates.length > 0) {
-        addLine("Restarting server to apply updates\u2026", "pending");
+      if (allOk && (payloadUpdates.length > 0 || launcherUpdate)) {
+        addLine("Restarting to apply updates\u2026", "pending");
         await new Promise((r) => setTimeout(r, 600));
         try {
           await invoke("restart_launcher");

@@ -94,6 +94,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: 'Tianshu Launcher ${{ inputs.tag || github.ref_name }}'
@@ -141,7 +143,89 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
             src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app.tar.gz.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage.sig
           if-no-files-found: ignore
+
+  # Generate latest.json for the Tauri updater after all platforms finish.
+  updater-json:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          REPO="tianshu-ai/tianshu-launcher"
+          VERSION="${TAG#v}"
+
+          # Read signatures from the .sig files in artifacts
+          read_sig() {
+            local pattern="$1"
+            local f=$(find artifacts -name "$pattern" 2>/dev/null | head -1)
+            if [ -n "$f" ]; then cat "$f"; else echo ""; fi
+          }
+
+          MAC_SIG=$(read_sig '*.app.tar.gz.sig')
+          WIN_NSIS_SIG=$(read_sig '*-setup.exe.sig')
+          WIN_MSI_SIG=$(read_sig '*.msi.sig')
+          LINUX_SIG=$(read_sig '*.AppImage.sig')
+
+          # Build the asset download URLs
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+
+          # Find actual filenames from the release
+          MAC_FILE=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep '.app.tar.gz$' | head -1)
+          WIN_NSIS_FILE=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep 'setup.exe$' | head -1)
+          WIN_MSI_FILE=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep '.msi$' | head -1)
+          LINUX_FILE=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep '.AppImage$' | head -1)
+
+          # Compose latest.json
+          cat > latest.json <<ENDJSON
+          {
+            "version": "${VERSION}",
+            "notes": "See https://github.com/${REPO}/releases/tag/${TAG}",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "${MAC_SIG}",
+                "url": "${BASE}/${MAC_FILE}"
+              },
+              "windows-x86_64": {
+                "signature": "${WIN_NSIS_SIG}",
+                "url": "${BASE}/${WIN_NSIS_FILE}"
+              },
+              "linux-x86_64": {
+                "signature": "${LINUX_SIG}",
+                "url": "${BASE}/${LINUX_FILE}"
+              }
+            }
+          }
+          ENDJSON
+
+          echo "--- latest.json ---"
+          cat latest.json
+
+      - name: Upload latest.json to Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          gh release upload "$TAG" latest.json --repo tianshu-ai/tianshu-launcher --clobber
