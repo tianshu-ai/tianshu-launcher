@@ -30,7 +30,29 @@ permissions:
   contents: write
 
 jobs:
+  # Create the draft release first so all platform jobs can upload to it.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create draft release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          # Check if release already exists
+          if gh release view "$TAG" --repo "${{ github.repository }}" &>/dev/null; then
+            echo "Release $TAG already exists, skipping creation"
+          else
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "Tianshu Launcher $TAG" \
+              --draft \
+              --notes "Building..."
+            echo "Created draft release $TAG"
+          fi
+
   release:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
