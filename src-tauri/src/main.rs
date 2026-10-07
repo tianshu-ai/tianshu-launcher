@@ -891,23 +891,198 @@ fn tts_status(state: State<ProcState>) -> TtsStatus {
 
 #[tauri::command]
 async fn install_tts(app: tauri::AppHandle) -> Result<String, String> {
-    let scripts = tts_scripts_dir(&app)?;
-    let install_sh = scripts.join("install.sh");
-    if !install_sh.exists() {
-        return Err(format!("install.sh not found at {install_sh:?}"));
+    let _scripts = tts_scripts_dir(&app)?;
+    install_tts_native()
+}
+
+// ---- Standalone Python download + TTS install ----
+
+/// Standalone Python version and release tag from astral-sh/python-build-standalone.
+const PYTHON_VERSION: &str = "3.12.15";
+const PYTHON_BUILD_TAG: &str = "20261003";
+
+/// Platform-specific download URL suffix for standalone Python.
+fn standalone_python_url() -> Result<String, String> {
+    let triple = if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        "aarch64-apple-darwin"
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
+        "x86_64-apple-darwin"
+    } else if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
+        "x86_64-pc-windows-msvc"
+    } else if cfg!(target_os = "windows") && cfg!(target_arch = "aarch64") {
+        "aarch64-pc-windows-msvc"
+    } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(target_os = "linux") && cfg!(target_arch = "aarch64") {
+        "aarch64-unknown-linux-gnu"
+    } else {
+        return Err("Unsupported platform for standalone Python".into());
+    };
+    Ok(format!(
+        "https://github.com/astral-sh/python-build-standalone/releases/download/{tag}/cpython-{ver}+{tag}-{triple}-install_only.tar.gz",
+        tag = PYTHON_BUILD_TAG, ver = PYTHON_VERSION, triple = triple
+    ))
+}
+
+/// Directory where standalone Python is installed.
+fn bundled_python_dir() -> PathBuf {
+    home_dir().join(".tianshu").join("python")
+}
+
+/// Path to the bundled Python binary.
+fn bundled_python_bin() -> PathBuf {
+    let base = bundled_python_dir();
+    if cfg!(windows) {
+        base.join("python").join("python.exe")
+    } else {
+        base.join("python").join("bin").join("python3")
     }
-    println!("[tts] running install.sh ...");
-    let out = Command::new("bash")
-        .arg(&install_sh)
-        .output()
-        .map_err(|e| format!("spawn install.sh: {e}"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
+}
+
+/// Download and extract standalone Python if not already present.
+fn ensure_standalone_python() -> Result<PathBuf, String> {
+    let python_bin = bundled_python_bin();
+    if python_bin.exists() {
+        println!("[tts] standalone Python already at {python_bin:?}");
+        return Ok(python_bin);
+    }
+
+    let url = standalone_python_url()?;
+    let dest_dir = bundled_python_dir();
+    std::fs::create_dir_all(&dest_dir).map_err(|e| format!("mkdir {dest_dir:?}: {e}"))?;
+
+    let tarball = dest_dir.join("python.tar.gz");
+    println!("[tts] downloading standalone Python from {url} ...");
+
+    // Use reqwest (already a dependency) via a blocking call, or curl/powershell.
+    // Simplest cross-platform: use the system tools available.
+    if cfg!(windows) {
+        // PowerShell Invoke-WebRequest
+        let out = Command::new("powershell")
+            .args(["-NoProfile", "-Command",
+                &format!("[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '{}' -OutFile '{}'",
+                    url, tarball.display())])
+            .output()
+            .map_err(|e| format!("download: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("download failed: {}", String::from_utf8_lossy(&out.stderr)));
+        }
+    } else {
+        // curl
+        let out = Command::new("curl")
+            .args(["-fSL", "--retry", "3", "-o"])
+            .arg(&tarball)
+            .arg(&url)
+            .output()
+            .map_err(|e| format!("curl: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("download failed: {}", String::from_utf8_lossy(&out.stderr)));
+        }
+    }
+    println!("[tts] download complete, extracting ...");
+
+    // Extract
+    if cfg!(windows) {
+        let out = Command::new("tar")
+            .args(["-xzf"])
+            .arg(&tarball)
+            .arg("-C")
+            .arg(&dest_dir)
+            .output()
+            .map_err(|e| format!("extract: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("extract failed: {}", String::from_utf8_lossy(&out.stderr)));
+        }
+    } else {
+        let out = Command::new("tar")
+            .args(["-xzf"])
+            .arg(&tarball)
+            .arg("-C")
+            .arg(&dest_dir)
+            .output()
+            .map_err(|e| format!("extract: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("extract failed: {}", String::from_utf8_lossy(&out.stderr)));
+        }
+    }
+
+    // Remove tarball
+    let _ = std::fs::remove_file(&tarball);
+
+    if python_bin.exists() {
+        println!("[tts] standalone Python ready at {python_bin:?}");
+        Ok(python_bin)
+    } else {
+        Err(format!("Python binary not found after extraction at {python_bin:?}"))
+    }
+}
+
+/// Cross-platform TTS install: download standalone Python, create venv, pip install deps.
+fn install_tts_native() -> Result<String, String> {
+    // Step 1: Ensure standalone Python is available
+    let python = ensure_standalone_python()?;
+
+    // Step 2: Create venv
+    let venv_dir = home_dir().join(".tianshu").join("qwen-tts-venv");
+    let (venv_py, pip) = if cfg!(windows) {
+        (venv_dir.join("Scripts").join("python.exe"), venv_dir.join("Scripts").join("pip.exe"))
+    } else {
+        (venv_dir.join("bin").join("python"), venv_dir.join("bin").join("pip"))
+    };
+
+    if !venv_py.exists() {
+        println!("[tts] creating venv at {venv_dir:?} ...");
+        let out = Command::new(&python)
+            .args(["-m", "venv"])
+            .arg(&venv_dir)
+            .output()
+            .map_err(|e| format!("create venv: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("venv creation failed: {}", String::from_utf8_lossy(&out.stderr)));
+        }
+    }
+
+    // Step 3: pip install dependencies
+    println!("[tts] installing dependencies ...");
+    let _ = run_cmd(&pip, &["install", "--upgrade", "pip"]);
+
+    let is_mac_arm = cfg!(target_os = "macos") && cfg!(target_arch = "aarch64");
+    let has_cuda = Command::new("nvidia-smi").output().map_or(false, |o| o.status.success());
+    let (deps, backend_label): (Vec<&str>, &str) = if is_mac_arm {
+        (vec!["mlx", "mlx-audio", "sounddevice", "soundfile", "numpy",
+              "fastapi", "uvicorn", "python-multipart"], "mlx (Apple Silicon)")
+    } else if has_cuda {
+        (vec!["faster-qwen3-tts", "soundfile", "numpy",
+              "fastapi", "uvicorn", "python-multipart"], "faster-qwen3-tts (CUDA)")
+    } else {
+        (vec!["qwen-tts", "soundfile", "numpy",
+              "fastapi", "uvicorn", "python-multipart"], "qwen-tts (CPU)")
+    };
+
+    let mut cmd = Command::new(&pip);
+    cmd.arg("install").args(&deps);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output().map_err(|e| format!("pip install: {e}"))?;
     if !out.status.success() {
-        return Err(format!("install failed:\n{stderr}\n{stdout}"));
+        return Err(format!("pip install failed: {}", String::from_utf8_lossy(&out.stderr)));
     }
-    println!("[tts] install complete");
-    Ok(format!("Installation complete.\n{stdout}"))
+
+    println!("[tts] install complete (backend: {backend_label})");
+    Ok(format!("Installation complete ({backend_label}).\nVenv: {venv_dir:?}"))
+}
+
+/// Helper: run a command and return stdout, ignoring errors.
+fn run_cmd(program: &std::path::Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| format!("{}: {e}", program.display()))?;
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 #[tauri::command]
@@ -925,25 +1100,60 @@ async fn start_tts(app: tauri::AppHandle, state: State<'_, ProcState>) -> Result
     if !server_py.exists() {
         return Err("server.py not found. Install TTS first.".into());
     }
-    let venv_python = home_dir().join(".tianshu").join("qwen-tts-venv").join("bin").join("python");
+    let venv_python = if cfg!(windows) {
+        home_dir().join(".tianshu").join("qwen-tts-venv").join("Scripts").join("python.exe")
+    } else {
+        home_dir().join(".tianshu").join("qwen-tts-venv").join("bin").join("python")
+    };
     if !venv_python.exists() {
         return Err("TTS not installed. Click \"Install\" first.".into());
     }
     println!("[tts] starting server on port {TTS_PORT} ...");
-    let child = Command::new(&venv_python)
-        .arg(&server_py)
+    let mut cmd = Command::new(&venv_python);
+    cmd.arg(&server_py)
         .args(["--port", &TTS_PORT.to_string(), "--voice", "yujie"])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn()
         .map_err(|e| format!("spawn TTS server: {e}"))?;
     let pid = child.id();
     println!("[tts] spawned pid={pid}");
-    {
-        let mut tts = state.tts.lock().unwrap();
-        *tts = Some(child);
+
+    // Wait a few seconds and check if the process is still alive.
+    // If it crashed immediately, capture stderr and report the error.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    match child.try_wait() {
+        Ok(Some(exit)) => {
+            // Process already exited — read stderr for the error message
+            let mut stderr_out = String::new();
+            if let Some(mut stderr) = child.stderr.take() {
+                use std::io::Read;
+                let _ = stderr.read_to_string(&mut stderr_out);
+            }
+            let mut stdout_out = String::new();
+            if let Some(mut stdout) = child.stdout.take() {
+                use std::io::Read;
+                let _ = stdout.read_to_string(&mut stdout_out);
+            }
+            let msg = if !stderr_out.is_empty() { stderr_out } else { stdout_out };
+            Err(format!("TTS server exited immediately (code: {exit}).\n{msg}"))
+        }
+        Ok(None) => {
+            // Still running — good
+            let mut tts = state.tts.lock().unwrap();
+            *tts = Some(child);
+            Ok(TtsStatus { installed: true, running: true, pid: Some(pid), port: TTS_PORT })
+        }
+        Err(e) => {
+            Err(format!("Failed to check TTS process status: {e}"))
+        }
     }
-    Ok(TtsStatus { installed: true, running: true, pid: Some(pid), port: TTS_PORT })
 }
 
 #[tauri::command]
