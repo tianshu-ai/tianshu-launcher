@@ -36,7 +36,8 @@
     ],
     "resources": {
       "resources/server": "resources/server",
-      "resources/bridge": "resources/bridge"
+      "resources/bridge": "resources/bridge",
+      "resources/npm": "resources/npm"
     },
     "externalBin": [
       "binaries/node"
