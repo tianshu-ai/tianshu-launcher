@@ -44,5 +44,8 @@ jobs:
           TARGET_TRIPLE: ${{ matrix.target }}
         run: npm run payload
 
-      - name: Build (dry — no signing)
+      - name: Build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         run: npm run build -- --target ${{ matrix.target }}
