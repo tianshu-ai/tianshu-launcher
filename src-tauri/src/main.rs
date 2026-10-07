@@ -399,6 +399,39 @@ fn payload_override_dir(sub: &str) -> PathBuf {
 
 fn launcher_data_dir() -> PathBuf { home_dir().join(".tianshu-launcher") }
 
+fn launcher_settings_path() -> PathBuf { launcher_data_dir().join("settings.json") }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct LauncherSettings {
+    /// Custom npm registry URL, e.g. "https://registry.npmmirror.com".
+    /// Empty or absent = default (https://registry.npmjs.org).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    npm_registry: Option<String>,
+}
+
+fn load_launcher_settings() -> LauncherSettings {
+    let path = launcher_settings_path();
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_launcher_settings(s: &LauncherSettings) -> Result<(), String> {
+    let dir = launcher_data_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
+    std::fs::write(launcher_settings_path(), json).map_err(|e| e.to_string())
+}
+
+fn effective_npm_registry(settings: &LauncherSettings) -> String {
+    settings.npm_registry.as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("https://registry.npmjs.org")
+        .trim_end_matches('/')
+        .to_string()
+}
+
 /// Cross-platform home directory resolver.
 /// Windows uses %USERPROFILE% (HOME is unset in a default install);
 /// macOS/Linux use $HOME. Falls back to '.' only in degenerate setups.
@@ -663,9 +696,8 @@ fn read_payload_version(app: &tauri::AppHandle, sub: &str, package: &str) -> Str
 }
 
 async fn fetch_npm_latest(package: &str) -> String {
-    // npm scoped packages: @scope/name → registry URL uses the raw path.
-    // reqwest::Url::parse preserves @/slash in paths, so format! is fine.
-    let url = format!("https://registry.npmjs.org/{package}/latest");
+    let registry = effective_npm_registry(&load_launcher_settings());
+    let url = format!("{registry}/{package}/latest");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()
@@ -790,6 +822,16 @@ async fn update_launcher(app: tauri::AppHandle) -> Result<String, String> {
         }
         None => Ok("Already up to date".into()),
     }
+}
+
+#[tauri::command]
+fn get_launcher_settings() -> LauncherSettings {
+    load_launcher_settings()
+}
+
+#[tauri::command]
+fn set_launcher_settings(settings: LauncherSettings) -> Result<(), String> {
+    save_launcher_settings(&settings)
 }
 
 /// Locate the bundled npm-cli.js shipped in resources/npm/.
@@ -924,9 +966,11 @@ fn install_payload_override(sub: &str, package: &str, node: &Path, npm_cli: &Pat
             _ => sys_path,
         }
     };
+    let registry = effective_npm_registry(&load_launcher_settings());
     let mut cmd = Command::new(node);
     cmd.arg(npm_cli)
-        .args(["install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps", &format!("{package}@latest")])
+        .args(["install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps",
+               &format!("--registry={registry}"), &format!("{package}@latest")])
         .current_dir(&tmp)
         .env("PATH", &enriched_path);
     #[cfg(windows)]
@@ -1577,6 +1621,8 @@ fn main() {
             check_updates,
             update_payload,
             update_launcher,
+            get_launcher_settings,
+            set_launcher_settings,
             restart_launcher
         ])
         .on_window_event(|window, event| {

@@ -428,6 +428,24 @@
     <div id="updates-body" class="updates-body"></div>
   </div>
 
+  <!-- Settings -->
+  <div class="updates-card" style="margin-top:6px">
+    <div class="updates-head">
+      <span>Settings</span>
+    </div>
+    <div style="padding:8px 12px">
+      <label style="font-size:12px;color:var(--fg-dim);display:block;margin-bottom:4px">
+        npm Registry (leave empty for default)
+      </label>
+      <div style="display:flex;gap:6px">
+        <input id="npm-registry-input" type="text" placeholder="https://registry.npmmirror.com"
+          style="flex:1;padding:4px 8px;border-radius:4px;border:1px solid var(--border);
+                 background:var(--bg-raised);color:var(--fg);font-size:12px;font-family:monospace">
+        <button id="save-registry-btn" style="padding:4px 10px;font-size:12px">Save</button>
+      </div>
+    </div>
+  </div>
+
   <div class="footer">
     Server: <code>~/.tianshu/</code> · Bridge: <code>~/.tianshu-bridge/</code>
   </div>

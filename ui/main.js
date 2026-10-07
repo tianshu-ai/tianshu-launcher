@@ -746,5 +746,25 @@
   // between events; the WS reconnect loop happens inside the bridge).
   setInterval(refreshBridge, 5000);
 
+  // ─── Settings: npm registry ─────────────────────────────────────
+
+  const registryInput = document.getElementById("npm-registry-input");
+  const saveRegistryBtn = document.getElementById("save-registry-btn");
+
+  // Load current setting
+  invoke("get_launcher_settings").then((s) => {
+    if (s && s.npm_registry) registryInput.value = s.npm_registry;
+  }).catch(() => {});
+
+  saveRegistryBtn.addEventListener("click", async () => {
+    const val = registryInput.value.trim() || null;
+    try {
+      await invoke("set_launcher_settings", { settings: { npm_registry: val } });
+      toast(val ? "Registry saved: " + val : "Registry reset to default", "ok");
+    } catch (err) {
+      toast("Failed to save: " + err, "error");
+    }
+  });
+
   console.log("[tianshu-launcher] UI ready");
 })();
