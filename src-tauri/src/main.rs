@@ -206,6 +206,8 @@ struct ProcState {
     /// Running bridge children keyed by profile id. Multiple profiles
     /// can run concurrently (same model as bridge-desktop).
     bridges: Mutex<HashMap<String, Child>>,
+    /// Optional Qwen3-TTS server child process.
+    tts: Mutex<Option<Child>>,
 }
 
 // ─── bridge profile config (compatible with bridge-desktop) ─────────
@@ -387,6 +389,21 @@ fn resource_payload_path(app: &tauri::AppHandle, sub: &str) -> Result<PathBuf, S
         }
     }
     Err(format!("payload entry not found: {candidate:?}"))
+}
+
+/// Locate the Qwen3-TTS scripts directory inside the server payload.
+/// Path: <server-payload-root>/node_modules/@tianshu-ai/tianshu/scripts/qwen3-tts-server/
+fn tts_scripts_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let server_entry = resource_payload_path(app, "server")?;
+    // server_entry is <root>/index.js → go up to <root>, then into the package
+    let root = server_entry.parent().ok_or("no parent")?;
+    let scripts = root.join("node_modules").join("@tianshu-ai").join("tianshu")
+        .join("scripts").join("qwen3-tts-server");
+    if scripts.exists() {
+        Ok(scripts)
+    } else {
+        Err(format!("TTS scripts not found at {scripts:?}. Update Tianshu server first."))
+    }
 }
 
 /// Where runtime-installed payload lives. Separate from bundled
@@ -834,6 +851,113 @@ fn set_launcher_settings(settings: LauncherSettings) -> Result<(), String> {
     save_launcher_settings(&settings)
 }
 
+/// TTS server status response.
+#[derive(Serialize, Clone)]
+struct TtsStatus {
+    installed: bool,
+    running: bool,
+    pid: Option<u32>,
+    port: u16,
+}
+
+const TTS_PORT: u16 = 50000;
+
+#[tauri::command]
+fn tts_status(state: State<ProcState>) -> TtsStatus {
+    let venv_py = if cfg!(windows) {
+        home_dir().join(".tianshu").join("qwen-tts-venv").join("Scripts").join("python.exe")
+    } else {
+        home_dir().join(".tianshu").join("qwen-tts-venv").join("bin").join("python")
+    };
+    let installed = venv_py.exists();
+    let mut child_guard = state.tts.lock().unwrap();
+    // Check if the child is still alive via try_wait (cross-platform).
+    let running = match child_guard.as_mut() {
+        Some(c) => match c.try_wait() {
+            Ok(None) => true,   // still running
+            _ => false,         // exited or error
+        },
+        None => false,
+    };
+    if !running {
+        // Clean up dead child
+        if child_guard.is_some() {
+            let _ = child_guard.take();
+        }
+    }
+    let pid = if running { child_guard.as_ref().map(|c| c.id()) } else { None };
+    TtsStatus { installed, running, pid, port: TTS_PORT }
+}
+
+#[tauri::command]
+async fn install_tts(app: tauri::AppHandle) -> Result<String, String> {
+    let scripts = tts_scripts_dir(&app)?;
+    let install_sh = scripts.join("install.sh");
+    if !install_sh.exists() {
+        return Err(format!("install.sh not found at {install_sh:?}"));
+    }
+    println!("[tts] running install.sh ...");
+    let out = Command::new("bash")
+        .arg(&install_sh)
+        .output()
+        .map_err(|e| format!("spawn install.sh: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() {
+        return Err(format!("install failed:\n{stderr}\n{stdout}"));
+    }
+    println!("[tts] install complete");
+    Ok(format!("Installation complete.\n{stdout}"))
+}
+
+#[tauri::command]
+async fn start_tts(app: tauri::AppHandle, state: State<'_, ProcState>) -> Result<TtsStatus, String> {
+    // Kill existing if any
+    {
+        let mut tts = state.tts.lock().unwrap();
+        if let Some(mut child) = tts.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    let scripts = tts_scripts_dir(&app)?;
+    let server_py = scripts.join("server.py");
+    if !server_py.exists() {
+        return Err("server.py not found. Install TTS first.".into());
+    }
+    let venv_python = home_dir().join(".tianshu").join("qwen-tts-venv").join("bin").join("python");
+    if !venv_python.exists() {
+        return Err("TTS not installed. Click \"Install\" first.".into());
+    }
+    println!("[tts] starting server on port {TTS_PORT} ...");
+    let child = Command::new(&venv_python)
+        .arg(&server_py)
+        .args(["--port", &TTS_PORT.to_string(), "--voice", "yujie"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn TTS server: {e}"))?;
+    let pid = child.id();
+    println!("[tts] spawned pid={pid}");
+    {
+        let mut tts = state.tts.lock().unwrap();
+        *tts = Some(child);
+    }
+    Ok(TtsStatus { installed: true, running: true, pid: Some(pid), port: TTS_PORT })
+}
+
+#[tauri::command]
+fn stop_tts(state: State<ProcState>) -> TtsStatus {
+    let mut tts = state.tts.lock().unwrap();
+    if let Some(mut child) = tts.take() {
+        println!("[tts] stopping pid={}", child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let venv = home_dir().join(".tianshu").join("qwen-tts-venv").join("bin").join("python");
+    TtsStatus { installed: venv.exists(), running: false, pid: None, port: TTS_PORT }
+}
+
 /// Locate the bundled npm-cli.js shipped in resources/npm/.
 fn bundled_npm_cli(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     // Bundled: resources/npm/bin/npm-cli.js
@@ -1044,6 +1168,13 @@ fn restart_launcher(app: tauri::AppHandle, state: State<ProcState>) {
     {
         let mut bridges = state.bridges.lock().unwrap();
         for (_, mut child) in bridges.drain() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    {
+        let mut tts = state.tts.lock().unwrap();
+        if let Some(mut child) = tts.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
@@ -1623,6 +1754,10 @@ fn main() {
             update_launcher,
             get_launcher_settings,
             set_launcher_settings,
+            tts_status,
+            install_tts,
+            start_tts,
+            stop_tts,
             restart_launcher
         ])
         .on_window_event(|window, event| {

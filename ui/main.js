@@ -746,6 +746,97 @@
   // between events; the WS reconnect loop happens inside the bridge).
   setInterval(refreshBridge, 5000);
 
+  // ─── TTS Server management ──────────────────────────────────
+
+  const ttsBadge = document.getElementById("tts-status-badge");
+  const ttsNotInstalled = document.getElementById("tts-not-installed");
+  const ttsInstalled = document.getElementById("tts-installed");
+  const installTtsBtn = document.getElementById("install-tts-btn");
+  const installTtsProgress = document.getElementById("install-tts-progress");
+  const startTtsBtn = document.getElementById("start-tts-btn");
+  const stopTtsBtn = document.getElementById("stop-tts-btn");
+  const ttsPid = document.getElementById("tts-pid");
+
+  function renderTtsStatus(s) {
+    if (!s.installed) {
+      ttsBadge.textContent = "not installed";
+      ttsBadge.style.color = "var(--fg-dim)";
+      ttsNotInstalled.style.display = "";
+      ttsInstalled.style.display = "none";
+    } else if (s.running) {
+      ttsBadge.textContent = "running";
+      ttsBadge.style.color = "#4ade80";
+      ttsNotInstalled.style.display = "none";
+      ttsInstalled.style.display = "";
+      startTtsBtn.disabled = true;
+      stopTtsBtn.disabled = false;
+      ttsPid.textContent = s.pid ? "pid " + s.pid : "";
+    } else {
+      ttsBadge.textContent = "stopped";
+      ttsBadge.style.color = "var(--fg-dim)";
+      ttsNotInstalled.style.display = "none";
+      ttsInstalled.style.display = "";
+      startTtsBtn.disabled = false;
+      stopTtsBtn.disabled = true;
+      ttsPid.textContent = "";
+    }
+  }
+
+  async function refreshTts() {
+    try {
+      const s = await invoke("tts_status");
+      renderTtsStatus(s);
+    } catch (err) {
+      ttsBadge.textContent = "error";
+      ttsBadge.style.color = "#f87171";
+    }
+  }
+
+  installTtsBtn.addEventListener("click", async () => {
+    installTtsBtn.disabled = true;
+    installTtsProgress.style.display = "";
+    installTtsProgress.textContent = "Installing\u2026 this may take a few minutes (downloading ~1.2 GB model)";
+    try {
+      const result = await invoke("install_tts");
+      installTtsProgress.textContent = "\u2713 " + (result || "Installed successfully");
+      toast("Qwen3-TTS installed", "ok");
+      refreshTts();
+    } catch (err) {
+      installTtsProgress.textContent = "\u2717 " + err;
+      toast("Install failed: " + err, "error");
+      installTtsBtn.disabled = false;
+    }
+  });
+
+  startTtsBtn.addEventListener("click", async () => {
+    startTtsBtn.disabled = true;
+    ttsBadge.textContent = "starting\u2026";
+    try {
+      const s = await invoke("start_tts");
+      renderTtsStatus(s);
+      toast("TTS server started", "ok");
+    } catch (err) {
+      toast("Failed to start TTS: " + err, "error");
+      refreshTts();
+    }
+  });
+
+  stopTtsBtn.addEventListener("click", async () => {
+    stopTtsBtn.disabled = true;
+    try {
+      const s = await invoke("stop_tts");
+      renderTtsStatus(s);
+      toast("TTS server stopped", "ok");
+    } catch (err) {
+      toast("Failed to stop TTS: " + err, "error");
+      refreshTts();
+    }
+  });
+
+  refreshTts();
+  // Poll TTS status every 10s (process can die externally)
+  setInterval(refreshTts, 10000);
+
   // ─── Settings: npm registry ─────────────────────────────────────
 
   const registryInput = document.getElementById("npm-registry-input");
