@@ -840,18 +840,26 @@
   // ─── Settings: npm registry ─────────────────────────────────────
 
   const registryInput = document.getElementById("npm-registry-input");
+  const pipIndexInput = document.getElementById("pip-index-input");
+  const pythonMirrorInput = document.getElementById("python-mirror-input");
   const saveRegistryBtn = document.getElementById("save-registry-btn");
 
-  // Load current setting
+  // Load current settings
   invoke("get_launcher_settings").then((s) => {
     if (s && s.npm_registry) registryInput.value = s.npm_registry;
+    if (s && s.pip_index) pipIndexInput.value = s.pip_index;
+    if (s && s.python_mirror) pythonMirrorInput.value = s.python_mirror;
   }).catch(() => {});
 
   saveRegistryBtn.addEventListener("click", async () => {
-    const val = registryInput.value.trim() || null;
+    const npm = registryInput.value.trim() || null;
+    const pip = pipIndexInput.value.trim() || null;
+    const pyMirror = pythonMirrorInput.value.trim() || null;
     try {
-      await invoke("set_launcher_settings", { settings: { npm_registry: val } });
-      toast(val ? "Registry saved: " + val : "Registry reset to default", "ok");
+      await invoke("set_launcher_settings", {
+        settings: { npm_registry: npm, pip_index: pip, python_mirror: pyMirror }
+      });
+      toast("Settings saved", "ok");
     } catch (err) {
       toast("Failed to save: " + err, "error");
     }

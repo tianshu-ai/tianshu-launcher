@@ -1,6 +1,6 @@
 [package]
 name = "tianshu-launcher"
-version = "0.1.4"
+version = "0.1.5"
 description = "Tianshu Launcher desktop app"
 authors = ["tianshu-ai"]
 edition = "2021"

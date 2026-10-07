@@ -446,7 +446,7 @@
           <button id="stop-tts-btn" style="padding:4px 12px;font-size:12px" disabled>Stop</button>
           <span id="tts-pid" style="font-size:11px;color:var(--fg-dim)"></span>
         </div>
-        <p style="font-size:11px;color:var(--fg-dim);margin:6px 0 0">Port: 50000 · Voice: yujie · Requires macOS Apple Silicon</p>
+        <p style="font-size:11px;color:var(--fg-dim);margin:6px 0 0">Port: 50000 · Voice: yujie</p>
       </div>
     </div>
   </div>
@@ -464,6 +464,24 @@
         <input id="npm-registry-input" type="text" placeholder="https://registry.npmmirror.com"
           style="flex:1;padding:4px 8px;border-radius:4px;border:1px solid var(--border);
                  background:var(--bg-raised);color:var(--fg);font-size:12px;font-family:monospace">
+      </div>
+      <label style="font-size:12px;color:var(--fg-dim);display:block;margin:8px 0 4px">
+        PyPI Index (leave empty for default)
+      </label>
+      <div style="display:flex;gap:6px">
+        <input id="pip-index-input" type="text" placeholder="https://pypi.tuna.tsinghua.edu.cn/simple"
+          style="flex:1;padding:4px 8px;border-radius:4px;border:1px solid var(--border);
+                 background:var(--bg-raised);color:var(--fg);font-size:12px;font-family:monospace">
+      </div>
+      <label style="font-size:12px;color:var(--fg-dim);display:block;margin:8px 0 4px">
+        Python Mirror (leave empty for default aliyun mirror)
+      </label>
+      <div style="display:flex;gap:6px">
+        <input id="python-mirror-input" type="text" placeholder="https://mirrors.aliyun.com/github/releases/astral-sh/python-build-standalone"
+          style="flex:1;padding:4px 8px;border-radius:4px;border:1px solid var(--border);
+                 background:var(--bg-raised);color:var(--fg);font-size:12px;font-family:monospace">
+      </div>
+      <div style="margin-top:8px">
         <button id="save-registry-btn" style="padding:4px 10px;font-size:12px">Save</button>
       </div>
     </div>

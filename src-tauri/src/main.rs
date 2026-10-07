@@ -424,6 +424,15 @@ struct LauncherSettings {
     /// Empty or absent = default (https://registry.npmjs.org).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     npm_registry: Option<String>,
+    /// Custom PyPI index URL for pip install, e.g. "https://pypi.tuna.tsinghua.edu.cn/simple".
+    /// Empty or absent = default (https://pypi.org/simple).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pip_index: Option<String>,
+    /// Mirror base URL for standalone Python downloads.
+    /// e.g. "https://mirrors.aliyun.com/github/releases/astral-sh/python-build-standalone"
+    /// Empty or absent = default (GitHub Releases direct).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    python_mirror: Option<String>,
 }
 
 fn load_launcher_settings() -> LauncherSettings {
@@ -901,8 +910,23 @@ async fn install_tts(app: tauri::AppHandle) -> Result<String, String> {
 const PYTHON_VERSION: &str = "3.12.15";
 const PYTHON_BUILD_TAG: &str = "20261003";
 
-/// Platform-specific download URL suffix for standalone Python.
-fn standalone_python_url() -> Result<String, String> {
+/// Effective pip index URL from settings.
+fn effective_pip_index(settings: &LauncherSettings) -> Option<String> {
+    settings.pip_index.as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+}
+
+/// Effective python mirror base URL from settings.
+fn effective_python_mirror(settings: &LauncherSettings) -> Option<String> {
+    settings.python_mirror.as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+}
+
+/// Platform-specific download URLs for standalone Python.
+/// Returns (primary_url, fallback_url) — if mirror configured, try that first.
+fn standalone_python_urls() -> Result<(String, String), String> {
     let triple = if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
         "aarch64-apple-darwin"
     } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
@@ -918,10 +942,30 @@ fn standalone_python_url() -> Result<String, String> {
     } else {
         return Err("Unsupported platform for standalone Python".into());
     };
-    Ok(format!(
-        "https://github.com/astral-sh/python-build-standalone/releases/download/{tag}/cpython-{ver}+{tag}-{triple}-install_only.tar.gz",
-        tag = PYTHON_BUILD_TAG, ver = PYTHON_VERSION, triple = triple
-    ))
+    let filename_encoded = format!(
+        "cpython-{ver}%2B{tag}-{triple}-install_only.tar.gz",
+        ver = PYTHON_VERSION, tag = PYTHON_BUILD_TAG, triple = triple
+    );
+    let filename_plain = format!(
+        "cpython-{ver}+{tag}-{triple}-install_only.tar.gz",
+        ver = PYTHON_VERSION, tag = PYTHON_BUILD_TAG, triple = triple
+    );
+    let settings = load_launcher_settings();
+    let primary = if let Some(base) = effective_python_mirror(&settings) {
+        // User-configured mirror
+        format!("{base}/{tag}/{filename_encoded}", tag = PYTHON_BUILD_TAG)
+    } else {
+        // Default: aliyun mirror (fast in China, works globally)
+        format!(
+            "https://mirrors.aliyun.com/github/releases/astral-sh/python-build-standalone/{tag}/{filename}",
+            tag = PYTHON_BUILD_TAG, filename = filename_encoded
+        )
+    };
+    let fallback = format!(
+        "https://github.com/astral-sh/python-build-standalone/releases/download/{tag}/{filename}",
+        tag = PYTHON_BUILD_TAG, filename = filename_plain
+    );
+    Ok((primary, fallback))
 }
 
 /// Directory where standalone Python is installed.
@@ -940,6 +984,37 @@ fn bundled_python_bin() -> PathBuf {
 }
 
 /// Download and extract standalone Python if not already present.
+/// Download a file with fallback: try primary URL first, then fallback.
+fn download_file(primary: &str, fallback: &str, dest: &std::path::Path) -> Result<(), String> {
+    for (i, url) in [primary, fallback].iter().enumerate() {
+        println!("[tts] downloading from {} ...", url);
+        let ok = if cfg!(windows) {
+            Command::new("powershell")
+                .args(["-NoProfile", "-Command",
+                    &format!("[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '{}' -OutFile '{}' -TimeoutSec 60",
+                        url, dest.display())])
+                .output()
+                .map_or(false, |o| o.status.success())
+        } else {
+            Command::new("curl")
+                .args(["-fSL", "--connect-timeout", "15", "--retry", "2", "-o"])
+                .arg(dest)
+                .arg(url)
+                .output()
+                .map_or(false, |o| o.status.success())
+        };
+        if ok && dest.exists() && std::fs::metadata(dest).map_or(0, |m| m.len()) > 1000 {
+            println!("[tts] download complete");
+            return Ok(());
+        }
+        let _ = std::fs::remove_file(dest);
+        if i == 0 {
+            println!("[tts] primary download failed, trying fallback ...");
+        }
+    }
+    Err(format!("Download failed from both:\n  {primary}\n  {fallback}"))
+}
+
 fn ensure_standalone_python() -> Result<PathBuf, String> {
     let python_bin = bundled_python_bin();
     if python_bin.exists() {
@@ -947,66 +1022,25 @@ fn ensure_standalone_python() -> Result<PathBuf, String> {
         return Ok(python_bin);
     }
 
-    let url = standalone_python_url()?;
+    let (primary, fallback) = standalone_python_urls()?;
     let dest_dir = bundled_python_dir();
     std::fs::create_dir_all(&dest_dir).map_err(|e| format!("mkdir {dest_dir:?}: {e}"))?;
 
     let tarball = dest_dir.join("python.tar.gz");
-    println!("[tts] downloading standalone Python from {url} ...");
+    download_file(&primary, &fallback, &tarball)?;
 
-    // Use reqwest (already a dependency) via a blocking call, or curl/powershell.
-    // Simplest cross-platform: use the system tools available.
-    if cfg!(windows) {
-        // PowerShell Invoke-WebRequest
-        let out = Command::new("powershell")
-            .args(["-NoProfile", "-Command",
-                &format!("[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '{}' -OutFile '{}'",
-                    url, tarball.display())])
-            .output()
-            .map_err(|e| format!("download: {e}"))?;
-        if !out.status.success() {
-            return Err(format!("download failed: {}", String::from_utf8_lossy(&out.stderr)));
-        }
-    } else {
-        // curl
-        let out = Command::new("curl")
-            .args(["-fSL", "--retry", "3", "-o"])
-            .arg(&tarball)
-            .arg(&url)
-            .output()
-            .map_err(|e| format!("curl: {e}"))?;
-        if !out.status.success() {
-            return Err(format!("download failed: {}", String::from_utf8_lossy(&out.stderr)));
-        }
-    }
-    println!("[tts] download complete, extracting ...");
-
-    // Extract
-    if cfg!(windows) {
-        let out = Command::new("tar")
-            .args(["-xzf"])
-            .arg(&tarball)
-            .arg("-C")
-            .arg(&dest_dir)
-            .output()
-            .map_err(|e| format!("extract: {e}"))?;
-        if !out.status.success() {
-            return Err(format!("extract failed: {}", String::from_utf8_lossy(&out.stderr)));
-        }
-    } else {
-        let out = Command::new("tar")
-            .args(["-xzf"])
-            .arg(&tarball)
-            .arg("-C")
-            .arg(&dest_dir)
-            .output()
-            .map_err(|e| format!("extract: {e}"))?;
-        if !out.status.success() {
-            return Err(format!("extract failed: {}", String::from_utf8_lossy(&out.stderr)));
-        }
+    println!("[tts] extracting ...");
+    let out = Command::new("tar")
+        .args(["-xzf"])
+        .arg(&tarball)
+        .arg("-C")
+        .arg(&dest_dir)
+        .output()
+        .map_err(|e| format!("extract: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("extract failed: {}", String::from_utf8_lossy(&out.stderr)));
     }
 
-    // Remove tarball
     let _ = std::fs::remove_file(&tarball);
 
     if python_bin.exists() {
@@ -1030,16 +1064,16 @@ fn install_tts_native() -> Result<String, String> {
         (venv_dir.join("bin").join("python"), venv_dir.join("bin").join("pip"))
     };
 
-    if !venv_py.exists() {
-        println!("[tts] creating venv at {venv_dir:?} ...");
-        let out = Command::new(&python)
-            .args(["-m", "venv"])
-            .arg(&venv_dir)
-            .output()
-            .map_err(|e| format!("create venv: {e}"))?;
-        if !out.status.success() {
-            return Err(format!("venv creation failed: {}", String::from_utf8_lossy(&out.stderr)));
-        }
+    // Always recreate venv to ensure it uses the correct Python and is clean.
+    // --clear wipes an existing venv before recreating.
+    println!("[tts] creating venv at {venv_dir:?} ...");
+    let out = Command::new(&python)
+        .args(["-m", "venv", "--clear"])
+        .arg(&venv_dir)
+        .output()
+        .map_err(|e| format!("create venv: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("venv creation failed: {}", String::from_utf8_lossy(&out.stderr)));
     }
 
     // Step 3: pip install dependencies
@@ -1059,8 +1093,13 @@ fn install_tts_native() -> Result<String, String> {
               "fastapi", "uvicorn", "python-multipart"], "qwen-tts (CPU)")
     };
 
+    let settings = load_launcher_settings();
     let mut cmd = Command::new(&pip);
-    cmd.arg("install").args(&deps);
+    cmd.arg("install");
+    if let Some(index) = effective_pip_index(&settings) {
+        cmd.args(["-i", &index]);
+    }
+    cmd.args(&deps);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1068,8 +1107,10 @@ fn install_tts_native() -> Result<String, String> {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     let out = cmd.output().map_err(|e| format!("pip install: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     if !out.status.success() {
-        return Err(format!("pip install failed: {}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!("pip install failed:\n{stderr}\n{stdout}"));
     }
 
     println!("[tts] install complete (backend: {backend_label})");
