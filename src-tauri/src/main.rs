@@ -443,37 +443,31 @@ fn web_dist_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     }
 }
 
+/// Kill a child process and its entire process tree.
+/// Windows: taskkill /T /F walks the tree.
+/// Unix: killpg sends SIGKILL to the whole process group (child was
+/// spawned with setsid so pid == pgid).
+fn kill_child_ref(child: &mut Child) {
+    let pid = child.id();
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .output();
+    }
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::killpg(pid as i32, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn kill_child(child_opt: &mut Option<Child>) {
-    if let Some(mut child) = child_opt.take() {
-        let pid = child.id();
-        // Windows: Rust's Child::kill() calls TerminateProcess on
-        // the direct child only. Node sidecars often spawn further
-        // children (worker threads, playwright, native binaries),
-        // which get orphaned on quit and keep listening on 3110.
-        // Use taskkill /T to walk the whole tree.
-        //
-        // Unix: we already install a dedicated process group via
-        // pre_exec(setsid), so killpg handles the tree. That path
-        // was removed when spawn_child was deleted; put it back
-        // inline via libc::killpg since the Child is already in
-        // its own session (we never joined it to ours).
-        #[cfg(windows)]
-        {
-            let _ = std::process::Command::new("taskkill")
-                .args(["/T", "/F", "/PID", &pid.to_string()])
-                .output();
-        }
-        #[cfg(unix)]
-        {
-            // SAFETY: pid comes from Child::id(); kind=negative pid
-            // sends to the whole process group whose leader is pid.
-            // We spawn with setsid so pid is its own pgid.
-            unsafe {
-                libc::killpg(pid as i32, libc::SIGKILL);
-            }
-        }
-        let _ = child.kill();
-        let _ = child.wait();
+    if let Some(ref mut child) = child_opt.take() {
+        kill_child_ref(child);
     }
 }
 
@@ -1311,10 +1305,10 @@ fn main() {
                         }
                         {
                             let mut bridges = state.bridges.lock().unwrap();
-                            for (_, mut child) in bridges.drain() {
-                                let _ = child.kill();
-                                let _ = child.wait();
+                            for (_, child) in bridges.iter_mut() {
+                                kill_child_ref(child);
                             }
+                            bridges.clear();
                         }
                         app.exit(0);
                     }
@@ -1469,19 +1463,7 @@ fn main() {
                 {
                     let mut bridges = state.bridges.lock().unwrap();
                     for (_, child) in bridges.iter_mut() {
-                        let pid = child.id();
-                        #[cfg(windows)]
-                        {
-                            let _ = std::process::Command::new("taskkill")
-                                .args(["/T", "/F", "/PID", &pid.to_string()])
-                                .output();
-                        }
-                        #[cfg(unix)]
-                        {
-                            unsafe { libc::killpg(pid as i32, libc::SIGKILL); }
-                        }
-                        let _ = child.kill();
-                        let _ = child.wait();
+                        kill_child_ref(child);
                     }
                     bridges.clear();
                 }
