@@ -467,9 +467,14 @@ fn kill_child_ref(child: &mut Child) {
     let pid = child.id();
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &pid.to_string()])
-            .output();
+        let mut kill_cmd = std::process::Command::new("taskkill");
+        kill_cmd.args(["/T", "/F", "/PID", &pid.to_string()]);
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            kill_cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let _ = kill_cmd.output();
     }
     #[cfg(unix)]
     {
@@ -804,9 +809,15 @@ fn bundled_npm_cli(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 fn find_npm() -> Result<PathBuf, String> {
     // 1. If npm is on PATH, use it (covers dev mode + Unix + nvm).
     let bare = if cfg!(windows) { "npm.cmd" } else { "npm" };
-    if let Ok(output) = Command::new(if cfg!(windows) { "where" } else { "which" })
-        .arg(bare)
-        .output()
+    let mut where_cmd = Command::new(if cfg!(windows) { "where" } else { "which" });
+    where_cmd.arg(bare);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        where_cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    if let Ok(output) = where_cmd.output()
     {
         if output.status.success() {
             let found = String::from_utf8_lossy(&output.stdout)
@@ -896,12 +907,18 @@ fn install_payload_override(sub: &str, package: &str, node: &Path, npm_cli: &Pat
             _ => sys_path,
         }
     };
-    let out = Command::new(node)
-        .arg(npm_cli)
+    let mut cmd = Command::new(node);
+    cmd.arg(npm_cli)
         .args(["install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps", &format!("{package}@latest")])
         .current_dir(&tmp)
-        .env("PATH", &enriched_path)
-        .output()
+        .env("PATH", &enriched_path);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let out = cmd.output()
         .map_err(|e| format!("npm install via bundled node: {e}"))?;
     if !out.status.success() {
         let _ = std::fs::remove_dir_all(&tmp);

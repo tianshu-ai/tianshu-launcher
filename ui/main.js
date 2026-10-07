@@ -616,12 +616,31 @@
     function addLine(text, status) {
       const row = document.createElement("div");
       row.className = "update-row " + status;
-      row.textContent = text;
+      if (status === "pending") {
+        const spinner = document.createElement("span");
+        spinner.className = "spinner";
+        row.appendChild(spinner);
+        const label = document.createElement("span");
+        label.textContent = text;
+        row.appendChild(label);
+        const elapsed = document.createElement("span");
+        elapsed.className = "elapsed";
+        elapsed.textContent = "0s";
+        row.appendChild(elapsed);
+        const t0 = Date.now();
+        row._timer = setInterval(() => {
+          elapsed.textContent = Math.round((Date.now() - t0) / 1000) + "s";
+        }, 1000);
+      } else {
+        row.textContent = text;
+      }
       progressEl.appendChild(row);
       return row;
     }
 
     function updateLine(row, text, status) {
+      if (row._timer) { clearInterval(row._timer); row._timer = null; }
+      row.innerHTML = "";
       row.textContent = text;
       row.className = "update-row " + status;
     }
