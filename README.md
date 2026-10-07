@@ -34,6 +34,31 @@ No Node install, no `npm`, no CLI. Launcher stays running in the tray.
   Installing the launcher next to an existing `npm i -g` install is
   safe — they share state.
 
+## Install
+
+Download the latest installer from
+[GitHub Releases](https://github.com/tianshu-ai/tianshu-launcher/releases).
+
+### macOS — "App is damaged" / Gatekeeper warning
+
+The app is not yet code-signed with an Apple Developer certificate.
+macOS Gatekeeper will block it the first time you open it. Fix:
+
+```bash
+xattr -cr /Applications/Tianshu.app
+```
+
+Then double-click to open normally. This only needs to be done once.
+
+### Windows — "Windows protected your PC" (SmartScreen)
+
+The installer is not yet code-signed. SmartScreen may show a warning.
+Click **More info → Run anyway** to proceed.
+
+### Linux
+
+No signing issues. Install the `.deb` package directly.
+
 ## Build
 
 ```bash

@@ -89,17 +89,29 @@ jobs:
           releaseBody: |
             Download the installer for your platform below.
 
-            - **macOS (Apple Silicon)**: `.dmg`
-            - **Windows**: `.msi` or `.exe` (NSIS)
-            - **Linux**: `.deb`
+            | Platform | File | Notes |
+            |----------|------|-------|
+            | **macOS** (Apple Silicon) | `.dmg` | See note below ↓ |
+            | **Windows** | `.exe` (NSIS) or `.msi` | SmartScreen warning — click "More info → Run anyway" |
+            | **Linux** | `.deb` | No issues |
+
+            ### ⚠️ macOS: "App is damaged" / Gatekeeper warning
+
+            The app is not yet code-signed. After installing, run this **once** in Terminal:
+
+            ```bash
+            xattr -cr /Applications/Tianshu.app
+            ```
+
+            Then open normally. This removes the quarantine flag that macOS adds to unsigned apps downloaded from the internet.
+
+            ---
 
             Includes:
-            - tianshu server (bundled Node 22 runtime, no system Node required)
-            - local-bridge CLI
-            - Dock/tray controls + bridge profile management
-
-            Unsigned builds for now — on macOS right-click → Open the
-            first time; on Windows you may see a SmartScreen warning.
+            - Tianshu server (bundled Node runtime, no system Node/npm required)
+            - Local Bridge + browser engine (@playwright/mcp)
+            - System tray with server/bridge controls
+            - In-app updates (Check for Updates in the UI)
           releaseDraft: true
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
           args: --target ${{ matrix.target }}
