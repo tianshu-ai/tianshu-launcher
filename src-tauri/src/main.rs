@@ -987,6 +987,33 @@ fn restart_launcher(app: tauri::AppHandle, state: State<ProcState>) {
             let _ = child.wait();
         }
     }
+    // Spawn a new instance of ourselves before exiting. The child
+    // inherits no stdio (detached) so it outlives this process.
+    if let Ok(exe) = std::env::current_exe() {
+        let mut cmd = Command::new(&exe);
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                cmd.pre_exec(|| { libc::setsid(); Ok(()) });
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+            const DETACHED_PROCESS: u32 = 0x00000008;
+            cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+        }
+        match cmd.spawn() {
+            Ok(_) => println!("[launcher] spawned new instance for restart"),
+            Err(e) => eprintln!("[launcher] failed to spawn restart: {e}"),
+        }
+    }
+    // Brief delay so the child has time to start before we exit.
+    std::thread::sleep(std::time::Duration::from_millis(500));
     app.exit(0);
 }
 
