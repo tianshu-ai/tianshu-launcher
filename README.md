@@ -45,7 +45,14 @@ The app is not yet code-signed with an Apple Developer certificate.
 macOS Gatekeeper will block it the first time you open it. Fix:
 
 ```bash
-xattr -cr /Applications/Tianshu.app
+/usr/bin/xattr -cr /Applications/Tianshu.app
+```
+
+If you get `option -r not recognized` (Python xattr shadowing the
+system one), use:
+
+```bash
+find /Applications/Tianshu.app -exec /usr/bin/xattr -c {} +
 ```
 
 Then double-click to open normally. This only needs to be done once.

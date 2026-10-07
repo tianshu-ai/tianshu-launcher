@@ -262,22 +262,17 @@ function quote(s) {
     "tianshu server",
     "server",
   );
+  // Install local-bridge + @playwright/mcp together in one npm install.
+  // @playwright/mcp is the browser-engine MCP server that local-bridge
+  // resolves at runtime via resolveEmbeddedMcp. It's not a direct npm
+  // dependency, so we must install it explicitly. Installing it in a
+  // SEPARATE npm install would cause npm to prune local-bridge (the
+  // package.json doesn't declare it as a dependency), so both must be
+  // in the same command.
   installPackagePayload(
     "bridge",
-    `@tianshu-ai/local-bridge@${BRIDGE_VERSION}`,
+    `@tianshu-ai/local-bridge@${BRIDGE_VERSION} @playwright/mcp@latest`,
     "local-bridge",
-  );
-
-  // @playwright/mcp is the browser-engine MCP server that local-bridge
-  // shells out to. It's not a direct dependency of local-bridge (it's
-  // resolved at runtime via resolveEmbeddedMcp), so npm install won't
-  // pull it automatically. Install it into the bridge payload so the
-  // bundled bridge can find it without needing npx (which isn't
-  // available in the Tauri .app / .exe — we only ship a bare node).
-  console.log("[payload] installing @playwright/mcp into bridge payload\u2026");
-  execSync(
-    "npm install --omit=dev --no-audit --no-fund --legacy-peer-deps @playwright/mcp@latest",
-    { cwd: path.join(srcTauri, "resources", "bridge"), stdio: "inherit" },
   );
   await prepareNode();
   console.log("[payload] done.");

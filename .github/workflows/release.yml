@@ -100,7 +100,13 @@ jobs:
             The app is not yet code-signed. After installing, run this **once** in Terminal:
 
             ```bash
-            xattr -cr /Applications/Tianshu.app
+            /usr/bin/xattr -cr /Applications/Tianshu.app
+            ```
+
+            If you get `option -r not recognized`, a Python xattr is shadowing the system one. Use:
+
+            ```bash
+            find /Applications/Tianshu.app -exec /usr/bin/xattr -c {} +
             ```
 
             Then open normally. This removes the quarantine flag that macOS adds to unsigned apps downloaded from the internet.

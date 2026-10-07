@@ -641,15 +641,24 @@ fn read_payload_version(app: &tauri::AppHandle, sub: &str, package: &str) -> Str
 }
 
 async fn fetch_npm_latest(package: &str) -> String {
+    // npm scoped packages: @scope/name → registry URL uses the raw path.
+    // reqwest::Url::parse preserves @/slash in paths, so format! is fine.
     let url = format!("https://registry.npmjs.org/{package}/latest");
-    let Ok(resp) = reqwest::Client::new()
-        .get(&url)
+    let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
-        .send()
-        .await
-    else {
-        return "unknown".to_string();
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[update] fetch {url}: {e}");
+            return "unknown".to_string();
+        }
     };
+    if !resp.status().is_success() {
+        eprintln!("[update] fetch {url}: HTTP {}", resp.status());
+        return "unknown".to_string();
+    }
     resp.json::<serde_json::Value>()
         .await
         .ok()
@@ -658,16 +667,28 @@ async fn fetch_npm_latest(package: &str) -> String {
 }
 
 async fn fetch_launcher_latest() -> String {
-    let Ok(resp) = reqwest::Client::new()
-        .get("https://api.github.com/repos/tianshu-ai/tianshu-launcher/releases/latest")
+    let url = "https://api.github.com/repos/tianshu-ai/tianshu-launcher/releases/latest";
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    let resp = match client
+        .get(url)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "tianshu-launcher")
-        .timeout(std::time::Duration::from_secs(8))
         .send()
         .await
-    else {
-        return "unknown".to_string();
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[update] fetch launcher latest: {e}");
+            return "unknown".to_string();
+        }
     };
+    if !resp.status().is_success() {
+        eprintln!("[update] fetch launcher latest: HTTP {}", resp.status());
+        return "unknown".to_string();
+    }
     resp.json::<serde_json::Value>()
         .await
         .ok()
