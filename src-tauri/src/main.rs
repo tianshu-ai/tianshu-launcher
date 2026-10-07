@@ -17,6 +17,21 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 
+/// Strip the Windows extended-length path prefix (`\\?\`) that Tauri's
+/// `resource_dir()` returns. Node.js's module loader cannot handle this
+/// prefix — `realpathSync('C:')` crashes with EISDIR.
+#[cfg(windows)]
+fn strip_unc_prefix(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        p
+    }
+}
+#[cfg(not(windows))]
+fn strip_unc_prefix(p: PathBuf) -> PathBuf { p }
+
 use serde::{Deserialize, Serialize};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -306,7 +321,8 @@ fn node_sidecar_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     };
 
     // 1. Resource dir (where Tauri says it put resources).
-    if let Ok(base) = app.path().resource_dir() {
+    if let Ok(raw_base) = app.path().resource_dir() {
+        let base = strip_unc_prefix(raw_base);
         for name in [triple_name.as_str(), plain_name] {
             if let Some(hit) = probe(base.join(name), &mut tried) { return Ok(hit); }
             if let Some(hit) = probe(base.join("binaries").join(name), &mut tried) { return Ok(hit); }
@@ -351,10 +367,10 @@ fn resource_payload_path(app: &tauri::AppHandle, sub: &str) -> Result<PathBuf, S
     }
 
     // 2. Bundled resource dir (production install).
-    let base = app
+    let base = strip_unc_prefix(app
         .path()
         .resource_dir()
-        .map_err(|e| format!("resource_dir: {e}"))?;
+        .map_err(|e| format!("resource_dir: {e}"))?);
     let candidate = base.join("resources").join(sub).join("index.js");
     if candidate.exists() {
         return Ok(candidate);
@@ -757,10 +773,10 @@ async fn update_payload(app: tauri::AppHandle, sub: String, package: String) -> 
 /// Locate the bundled npm-cli.js shipped in resources/npm/.
 fn bundled_npm_cli(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     // Bundled: resources/npm/bin/npm-cli.js
-    let res = app
+    let res = strip_unc_prefix(app
         .path()
         .resource_dir()
-        .map_err(|e| format!("resource_dir: {e}"))?;
+        .map_err(|e| format!("resource_dir: {e}"))?);
     let cli = res.join("resources").join("npm").join("bin").join("npm-cli.js");
     if cli.exists() {
         return Ok(cli);
