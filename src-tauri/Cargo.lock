@@ -4431,7 +4431,7 @@ dependencies = [
 
 [[package]]
 name = "tianshu-launcher"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "libc",
  "reqwest 0.12.28",

@@ -865,11 +865,21 @@ fn set_launcher_settings(settings: LauncherSettings) -> Result<(), String> {
 struct TtsStatus {
     installed: bool,
     running: bool,
+    /// Port is listening and server responded to health check.
+    ready: bool,
     pid: Option<u32>,
     port: u16,
 }
 
 const TTS_PORT: u16 = 50000;
+
+/// Check if TTS server is responding on the health endpoint.
+fn tts_health_check() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], TTS_PORT)),
+        std::time::Duration::from_millis(500),
+    ).is_ok()
+}
 
 #[tauri::command]
 fn tts_status(state: State<ProcState>) -> TtsStatus {
@@ -895,7 +905,8 @@ fn tts_status(state: State<ProcState>) -> TtsStatus {
         }
     }
     let pid = if running { child_guard.as_ref().map(|c| c.id()) } else { None };
-    TtsStatus { installed, running, pid, port: TTS_PORT }
+    let ready = running && tts_health_check();
+    TtsStatus { installed, running, ready, pid, port: TTS_PORT }
 }
 
 #[tauri::command]
@@ -1058,7 +1069,7 @@ fn install_tts_native() -> Result<String, String> {
 
     // Step 2: Create venv
     let venv_dir = home_dir().join(".tianshu").join("qwen-tts-venv");
-    let (venv_py, pip) = if cfg!(windows) {
+    let (_venv_py, pip) = if cfg!(windows) {
         (venv_dir.join("Scripts").join("python.exe"), venv_dir.join("Scripts").join("pip.exe"))
     } else {
         (venv_dir.join("bin").join("python"), venv_dir.join("bin").join("pip"))
@@ -1081,37 +1092,57 @@ fn install_tts_native() -> Result<String, String> {
     let _ = run_cmd(&pip, &["install", "--upgrade", "pip"]);
 
     let is_mac_arm = cfg!(target_os = "macos") && cfg!(target_arch = "aarch64");
-    let has_cuda = Command::new("nvidia-smi").output().map_or(false, |o| o.status.success());
-    let (deps, backend_label): (Vec<&str>, &str) = if is_mac_arm {
-        (vec!["mlx", "mlx-audio", "sounddevice", "soundfile", "numpy",
-              "fastapi", "uvicorn", "python-multipart"], "mlx (Apple Silicon)")
-    } else if has_cuda {
-        (vec!["faster-qwen3-tts", "soundfile", "numpy",
-              "fastapi", "uvicorn", "python-multipart"], "faster-qwen3-tts (CUDA)")
-    } else {
-        (vec!["qwen-tts", "soundfile", "numpy",
-              "fastapi", "uvicorn", "python-multipart"], "qwen-tts (CPU)")
+    let has_nvidia = Command::new("nvidia-smi").output().map_or(false, |o| o.status.success());
+    let settings = load_launcher_settings();
+
+    // Helper to run pip install with optional index and CREATE_NO_WINDOW on Windows.
+    let pip_install = |args: &[&str], index_url: Option<&str>| -> Result<(), String> {
+        let mut cmd = Command::new(&pip);
+        cmd.arg("install");
+        if let Some(idx) = index_url {
+            cmd.args(["-i", idx]);
+        } else if let Some(idx) = effective_pip_index(&settings) {
+            cmd.args(["-i", &idx]);
+        }
+        cmd.args(args);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let out = cmd.output().map_err(|e| format!("pip install: {e}"))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            return Err(format!("pip install failed:\n{stderr}\n{stdout}"));
+        }
+        Ok(())
     };
 
-    let settings = load_launcher_settings();
-    let mut cmd = Command::new(&pip);
-    cmd.arg("install");
-    if let Some(index) = effective_pip_index(&settings) {
-        cmd.args(["-i", &index]);
-    }
-    cmd.args(&deps);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let out = cmd.output().map_err(|e| format!("pip install: {e}"))?;
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    if !out.status.success() {
-        return Err(format!("pip install failed:\n{stderr}\n{stdout}"));
-    }
+    let backend_label;
+    let common_deps = ["soundfile", "numpy", "fastapi", "uvicorn", "python-multipart"];
+
+    if is_mac_arm {
+        backend_label = "mlx (Apple Silicon)";
+        pip_install(&["mlx", "mlx-audio", "sounddevice", "soundfile", "numpy",
+                      "fastapi", "uvicorn", "python-multipart"], None)?;
+    } else if has_nvidia {
+        backend_label = "faster-qwen3-tts (CUDA)";
+        // Step 1: Install CUDA-enabled PyTorch first
+        println!("[tts] installing CUDA PyTorch ...");
+        pip_install(&["torch", "torchaudio"], Some("https://download.pytorch.org/whl/cu124"))?;
+        // Step 2: Install faster-qwen3-tts (torch already satisfied → won't pull CPU version)
+        println!("[tts] installing TTS backends ...");
+        let mut deps: Vec<&str> = vec!["faster-qwen3-tts"];
+        deps.extend_from_slice(&common_deps);
+        pip_install(&deps, None)?;
+    } else {
+        backend_label = "qwen-tts (CPU)";
+        let mut deps: Vec<&str> = vec!["qwen-tts"];
+        deps.extend_from_slice(&common_deps);
+        pip_install(&deps, None)?;
+    };
 
     println!("[tts] install complete (backend: {backend_label})");
     Ok(format!("Installation complete ({backend_label}).\nVenv: {venv_dir:?}"))
@@ -1149,12 +1180,20 @@ async fn start_tts(app: tauri::AppHandle, state: State<'_, ProcState>) -> Result
     if !venv_python.exists() {
         return Err("TTS not installed. Click \"Install\" first.".into());
     }
-    println!("[tts] starting server on port {TTS_PORT} ...");
+    // Log file for TTS server output — readable from UI for diagnostics.
+    let log_path = home_dir().join(".tianshu").join("qwen-tts-server.log");
+    let log_file = std::fs::File::create(&log_path)
+        .map_err(|e| format!("create log file: {e}"))?;
+    let log_err = log_file.try_clone()
+        .map_err(|e| format!("clone log file: {e}"))?;
+
+    println!("[tts] starting server on port {TTS_PORT}, log: {log_path:?}");
     let mut cmd = Command::new(&venv_python);
     cmd.arg(&server_py)
         .args(["--port", &TTS_PORT.to_string(), "--voice", "yujie"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stdout(log_file)
+        .stderr(log_err)
+        .stdin(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1167,29 +1206,20 @@ async fn start_tts(app: tauri::AppHandle, state: State<'_, ProcState>) -> Result
     println!("[tts] spawned pid={pid}");
 
     // Wait a few seconds and check if the process is still alive.
-    // If it crashed immediately, capture stderr and report the error.
     std::thread::sleep(std::time::Duration::from_secs(3));
     match child.try_wait() {
         Ok(Some(exit)) => {
-            // Process already exited — read stderr for the error message
-            let mut stderr_out = String::new();
-            if let Some(mut stderr) = child.stderr.take() {
-                use std::io::Read;
-                let _ = stderr.read_to_string(&mut stderr_out);
-            }
-            let mut stdout_out = String::new();
-            if let Some(mut stdout) = child.stdout.take() {
-                use std::io::Read;
-                let _ = stdout.read_to_string(&mut stdout_out);
-            }
-            let msg = if !stderr_out.is_empty() { stderr_out } else { stdout_out };
-            Err(format!("TTS server exited immediately (code: {exit}).\n{msg}"))
+            // Process already exited — read log file for the error
+            let log_content = std::fs::read_to_string(&log_path).unwrap_or_default();
+            // Take last 2000 chars to avoid huge messages
+            let tail: String = log_content.chars().rev().take(2000).collect::<Vec<_>>().into_iter().rev().collect();
+            Err(format!("TTS server exited immediately (code: {exit}).\n{tail}"))
         }
         Ok(None) => {
             // Still running — good
             let mut tts = state.tts.lock().unwrap();
             *tts = Some(child);
-            Ok(TtsStatus { installed: true, running: true, pid: Some(pid), port: TTS_PORT })
+            Ok(TtsStatus { installed: true, running: true, ready: false, pid: Some(pid), port: TTS_PORT })
         }
         Err(e) => {
             Err(format!("Failed to check TTS process status: {e}"))
@@ -1206,7 +1236,13 @@ fn stop_tts(state: State<ProcState>) -> TtsStatus {
         let _ = child.wait();
     }
     let venv = home_dir().join(".tianshu").join("qwen-tts-venv").join("bin").join("python");
-    TtsStatus { installed: venv.exists(), running: false, pid: None, port: TTS_PORT }
+    TtsStatus { installed: venv.exists(), running: false, ready: false, pid: None, port: TTS_PORT }
+}
+
+#[tauri::command]
+fn tts_log() -> String {
+    let log_path = home_dir().join(".tianshu").join("qwen-tts-server.log");
+    std::fs::read_to_string(&log_path).unwrap_or_else(|_| "No log file found.".into())
 }
 
 /// Locate the bundled npm-cli.js shipped in resources/npm/.
@@ -2009,6 +2045,7 @@ fn main() {
             install_tts,
             start_tts,
             stop_tts,
+            tts_log,
             restart_launcher
         ])
         .on_window_event(|window, event| {

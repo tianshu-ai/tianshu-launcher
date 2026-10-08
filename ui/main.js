@@ -763,9 +763,12 @@
       ttsBadge.style.color = "var(--fg-dim)";
       ttsNotInstalled.style.display = "";
       ttsInstalled.style.display = "none";
-    } else if (s.running) {
-      ttsBadge.textContent = "running";
+    } else if (s.running && s.ready) {
+      ttsBadge.textContent = "ready";
       ttsBadge.style.color = "#4ade80";
+    } else if (s.running) {
+      ttsBadge.textContent = "starting\u2026";
+      ttsBadge.style.color = "#facc15";
       ttsNotInstalled.style.display = "none";
       ttsInstalled.style.display = "";
       startTtsBtn.disabled = true;
@@ -806,6 +809,21 @@
       toast("Install failed: " + err, "error");
       installTtsBtn.disabled = false;
     }
+  });
+
+  const reinstallTtsBtn = document.getElementById("reinstall-tts-btn");
+  reinstallTtsBtn.addEventListener("click", async () => {
+    reinstallTtsBtn.disabled = true;
+    reinstallTtsBtn.textContent = "Reinstalling\u2026";
+    try {
+      const result = await invoke("install_tts");
+      toast("Reinstalled: " + (result || "OK"), "ok");
+      refreshTts();
+    } catch (err) {
+      toast("Reinstall failed: " + err, "error");
+    }
+    reinstallTtsBtn.disabled = false;
+    reinstallTtsBtn.textContent = "Reinstall";
   });
 
   startTtsBtn.addEventListener("click", async () => {
