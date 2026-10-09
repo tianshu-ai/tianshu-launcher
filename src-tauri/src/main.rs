@@ -735,7 +735,7 @@ async fn fetch_npm_latest(package: &str) -> String {
     let settings = load_launcher_settings();
     let registry = effective_npm_registry(&settings);
     let tag = match effective_update_channel(&settings) {
-        "dev" => "next",
+        "next" => "next",
         _ => "latest",
     };
     let url = format!("{registry}/{package}/{tag}");
@@ -1395,7 +1395,7 @@ fn install_payload_override(sub: &str, package: &str, node: &Path, npm_cli: &Pat
     let settings = load_launcher_settings();
     let registry = effective_npm_registry(&settings);
     let install_tag = match effective_update_channel(&settings) {
-        "dev" => "next",
+        "next" => "next",
         _ => "latest",
     };
     let mut cmd = Command::new(node);
