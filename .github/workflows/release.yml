@@ -104,7 +104,9 @@ jobs:
           path: |
             src-tauri/resources
             src-tauri/binaries
-          key: payload-${{ matrix.target }}-${{ hashFiles('scripts/prepare-payload.mjs', 'package.json') }}
+          key: payload-${{ matrix.target }}-${{ hashFiles('scripts/prepare-payload.mjs') }}
+          restore-keys: |
+            payload-${{ matrix.target }}-
 
       - name: Prepare payload
         if: steps.payload-cache.outputs.cache-hit != 'true'
