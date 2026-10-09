@@ -574,7 +574,8 @@
         // before v1.0.0).
         vers.innerHTML = c.current + " <span class=\"tag\">\u2014</span>";
       } else {
-        vers.innerHTML = c.current + " <span class=\"tag\">latest</span>";
+        const tagLabel = report.channel === "next" ? "next" : "latest";
+      vers.innerHTML = c.current + " <span class=\"tag\">" + tagLabel + "</span>";
       }
       row.appendChild(vers);
       updatesBody.appendChild(row);

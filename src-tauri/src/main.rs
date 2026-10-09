@@ -709,6 +709,8 @@ struct ComponentVersion {
 struct VersionReport {
     components: Vec<ComponentVersion>,
     any_update: bool,
+    /// "stable" or "next" — tells the UI which channel was checked.
+    channel: String,
 }
 
 fn read_payload_version(app: &tauri::AppHandle, sub: &str, package: &str) -> String {
@@ -793,17 +795,35 @@ async fn fetch_launcher_latest() -> String {
 
 fn is_update_available(current: &str, latest: &str) -> bool {
     if current == "unknown" || latest == "unknown" || current == latest { return false; }
-    let parse = |v: &str| -> (Vec<u64>, bool) {
+    // Parse "0.88.0-next.42" → base=[0,88,0], pre_num=Some(42)
+    let parse = |v: &str| -> (Vec<u64>, Option<u64>) {
         let (base, pre) = v.split_once('-').map_or((v, ""), |(a, b)| (a, b));
         let nums = base.split('.').map(|p| p.parse::<u64>().unwrap_or(0)).collect();
-        (nums, !pre.is_empty())
+        // Extract trailing number from pre-release: "next.42" → 42
+        let pre_num = if pre.is_empty() {
+            None
+        } else {
+            pre.rsplit('.').next().and_then(|s| s.parse::<u64>().ok())
+        };
+        (nums, pre_num)
     };
-    let (cur_n, cur_pre) = parse(current);
-    let (lat_n, lat_pre) = parse(latest);
-    match lat_n.cmp(&cur_n) {
+    let (cur_base, cur_pre) = parse(current);
+    let (lat_base, lat_pre) = parse(latest);
+    match lat_base.cmp(&cur_base) {
         std::cmp::Ordering::Greater => true,
         std::cmp::Ordering::Less => false,
-        std::cmp::Ordering::Equal => cur_pre && !lat_pre,
+        std::cmp::Ordering::Equal => {
+            match (cur_pre, lat_pre) {
+                // both stable, same base → no update
+                (None, None) => false,
+                // current is pre, latest is stable → update
+                (Some(_), None) => true,
+                // current is stable, latest is pre → no update (don't downgrade)
+                (None, Some(_)) => false,
+                // both pre-release → compare pre-release number
+                (Some(c), Some(l)) => l > c,
+            }
+        }
     }
 }
 
@@ -833,7 +853,8 @@ async fn check_updates(app: tauri::AppHandle) -> Result<VersionReport, String> {
         },
     ];
     let any_update = components.iter().any(|c| c.update_available);
-    Ok(VersionReport { components, any_update })
+    let channel = effective_update_channel(&load_launcher_settings()).to_string();
+    Ok(VersionReport { components, any_update, channel })
 }
 
 #[tauri::command]
