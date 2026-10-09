@@ -433,6 +433,10 @@ struct LauncherSettings {
     /// Empty or absent = default (GitHub Releases direct).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     python_mirror: Option<String>,
+    /// Update channel: "stable" (npm latest) or "dev" (npm next/pre-release).
+    /// Empty or absent = "stable".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    update_channel: Option<String>,
 }
 
 fn load_launcher_settings() -> LauncherSettings {
@@ -721,9 +725,20 @@ fn read_payload_version(app: &tauri::AppHandle, sub: &str, package: &str) -> Str
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+fn effective_update_channel(settings: &LauncherSettings) -> &str {
+    settings.update_channel.as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("stable")
+}
+
 async fn fetch_npm_latest(package: &str) -> String {
-    let registry = effective_npm_registry(&load_launcher_settings());
-    let url = format!("{registry}/{package}/latest");
+    let settings = load_launcher_settings();
+    let registry = effective_npm_registry(&settings);
+    let tag = match effective_update_channel(&settings) {
+        "dev" => "next",
+        _ => "latest",
+    };
+    let url = format!("{registry}/{package}/{tag}");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .build()
@@ -1377,11 +1392,16 @@ fn install_payload_override(sub: &str, package: &str, node: &Path, npm_cli: &Pat
             _ => sys_path,
         }
     };
-    let registry = effective_npm_registry(&load_launcher_settings());
+    let settings = load_launcher_settings();
+    let registry = effective_npm_registry(&settings);
+    let install_tag = match effective_update_channel(&settings) {
+        "dev" => "next",
+        _ => "latest",
+    };
     let mut cmd = Command::new(node);
     cmd.arg(npm_cli)
         .args(["install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps",
-               &format!("--registry={registry}"), &format!("{package}@latest")])
+               &format!("--registry={registry}"), &format!("{package}@{install_tag}")])
         .current_dir(&tmp)
         .env("PATH", &enriched_path);
     #[cfg(windows)]
