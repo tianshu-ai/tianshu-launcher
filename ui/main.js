@@ -83,7 +83,6 @@
   serverEls.btn.addEventListener("click", async () => {
     if (serverStarting) return;
     if (!serverState.server_running) {
-      // Starting: show intermediate state immediately
       serverStarting = true;
       renderServer();
       try {
@@ -101,7 +100,6 @@
         renderServer();
       }
     } else {
-      // Stopping
       serverEls.btn.disabled = true;
       try {
         serverState = await invoke("stop_server");
@@ -121,30 +119,17 @@
   });
 
   // ─── bridge tab ─────────────────────────────────────────────────
-  //
-  // Profile list is derived from ~/.tianshu-bridge/config.json via two
-  // Rust commands:
-  //   - load_bridge_profiles / save_bridge_profiles — read/write JSON
-  //   - bridge_status — list with current running flags
-  //   - start_bridge_profile / stop_bridge_profile — per-profile toggle
-  //
-  // Each card can be expanded in-place to edit; "Save" writes the
-  // whole config.json back.
 
   const listEl = document.getElementById("profile-list");
   const badgeEl = document.getElementById("bridge-badge");
   const addBtn = document.getElementById("add-profile-btn");
   const pasteBtn = document.getElementById("paste-profile-btn");
-  // Tauri 2 clipboard plugin — may be undefined if plugin isn't loaded,
-  // in which case we fall back to navigator.clipboard (requires focus).
   const readClipboard = tauri?.clipboardManager?.readText;
-  // Edit-state cache so toggling edit mode doesn't reset in-progress
-  // field changes while bridge_status polls every few seconds.
-  const openEdits = new Set(); // profile ids currently being edited
-  const editDrafts = new Map(); // id → draft BridgeProfile
+  const openEdits = new Set();
+  const editDrafts = new Map();
 
   let profiles = [];
-  let statusMap = new Map(); // id → running bool
+  let statusMap = new Map();
 
   function updateBadge() {
     const running = Array.from(statusMap.values()).filter(Boolean).length;
@@ -171,7 +156,6 @@
     const card = document.createElement("div");
     card.className = "card profile-card" + (running ? " running" : "");
 
-    // Head: name + status + buttons
     const head = document.createElement("div");
     head.className = "profile-head";
 
@@ -268,7 +252,6 @@
     form.appendChild(text("Token", "token", "password", "optional auth token"));
     form.appendChild(text("Device", "device", "text", "device id (optional)"));
 
-    // Engine select
     const engineRow = document.createElement("div");
     engineRow.className = "form-row";
     const eLabel = document.createElement("label");
@@ -290,7 +273,6 @@
     engineRow.appendChild(sel);
     form.appendChild(engineRow);
 
-    // Flags row
     const flagsRow = document.createElement("div");
     flagsRow.className = "form-row inline";
     const spacer = document.createElement("label");
@@ -302,13 +284,9 @@
     flagsRow.appendChild(checkbox("Auto-start", "auto_start"));
     form.appendChild(flagsRow);
 
-    // Actions
     const actions = document.createElement("div");
     actions.className = "form-row actions";
 
-    // Two-step delete: first click arms, second click within 3s confirms.
-    // window.confirm() is blocked in Tauri's webview on some platforms,
-    // so we handle confirmation inline.
     const delBtn = document.createElement("button");
     delBtn.className = "danger";
     delBtn.textContent = "Delete";
@@ -352,7 +330,6 @@
     saveBtn.textContent = "Save";
     saveBtn.addEventListener("click", async () => {
       try {
-        // Validate
         if (!draft.name?.trim()) {
           toast("Name required", "error");
           return;
@@ -361,7 +338,6 @@
           toast("Server must start with ws:// or wss://", "error");
           return;
         }
-        // Replace in list
         const idx = profiles.findIndex((x) => x.id === original.id);
         if (idx >= 0) profiles[idx] = { ...original, ...draft };
         await invoke("save_bridge_profiles", { cfg: { profiles } });
@@ -391,18 +367,9 @@
     }
   }
 
-  // Parse a Tianshu-bridge invite from clipboard. Accepted formats:
-  //   1. tsbridge://configure?server=wss://...&token=***
-  //   2. {"server":"wss://...","token":"..."}  (any BridgeProfile fields)
-  //   3. wss://host/ws  or  wss://host/ws TOKEN
-  //   4. tsbridge --server wss://host/ws --token TOKEN (full CLI command)
   function parseInvite(raw) {
     const trimmed = raw.trim();
     if (!trimmed) return null;
-    // 1. tsbridge:// URL
-    // Format emitted by tianshu's reverse-mcp UI:
-    //   tsbridge://configure?server=...&token=***&browser=0|1
-    //     &engine=own|stealth&headless=0|1&shell=0|1&device=...
     if (/^tsbridge:\/\//i.test(trimmed)) {
       try {
         const u = new URL(trimmed);
@@ -420,18 +387,14 @@
         return out;
       } catch { return null; }
     }
-    // 2. JSON
     if (trimmed.startsWith("{")) {
       try { return JSON.parse(trimmed); } catch { return null; }
     }
-    // 3. plain ws(s) url (with optional token after whitespace)
     if (/^wss?:\/\//i.test(trimmed)) {
       const parts = trimmed.split(/\s+/);
       return { server: parts[0], token: parts[1] || "" };
     }
-    // 4. 'tsbridge --server ... --token ...' style command line
     if (/tsbridge\b|--server\b/.test(trimmed)) {
-      // Split respecting single/double quotes.
       const tokens = [];
       const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
       let m;
@@ -476,7 +439,6 @@
       toast("Couldn\u2019t parse \u2014 expected tsbridge:// URL, JSON, wss://, or tsbridge command", "error");
       return;
     }
-    // Derive a friendly name from the hostname.
     let name;
     try { name = new URL(parsed.server).hostname; }
     catch { name = parsed.server.slice(0, 32); }
@@ -504,7 +466,6 @@
   });
 
   addBtn.addEventListener("click", async () => {
-    // Generate a client-side id matching Rust's gen_id format shape.
     const id = "p_" + Date.now().toString(16) + "_" + Math.floor(Math.random() * 0xffffffff).toString(16);
     const fresh = {
       id,
@@ -529,28 +490,172 @@
     }
   });
 
+  // ─── TTS Server (compact) ──────────────────────────────────────
 
-  // ─── updates ─────────────────────────────────────────────────
-  //
-  // One button checks all three components (launcher app, embedded
-  // tianshu server, embedded local-bridge). If any has an update, we
-  // show per-component versions with Current → Latest and a single
-  // 'Update All' action. Server/bridge get npm install'd into the
-  // override dir (next spawn picks them up); launcher directs the
-  // user to the GitHub releases page for the new installer.
+  const ttsDot = document.getElementById("tts-dot");
+  const ttsSub = document.getElementById("tts-sub");
+  const ttsActions = document.getElementById("tts-actions");
+  const ttsProgressEl = document.getElementById("tts-progress");
 
+  function renderTtsCompact(s) {
+    ttsActions.innerHTML = "";
+
+    if (!s.installed) {
+      ttsDot.className = "dot";
+      ttsSub.textContent = "Not installed";
+      const btn = document.createElement("button");
+      btn.className = "primary";
+      btn.textContent = "Install";
+      btn.addEventListener("click", doInstallTts);
+      ttsActions.appendChild(btn);
+    } else if (s.running && s.ready) {
+      ttsDot.className = "dot on";
+      ttsSub.textContent = "Ready \u00b7 Port " + s.port;
+      const btn = document.createElement("button");
+      btn.textContent = "Stop";
+      btn.addEventListener("click", doStopTts);
+      ttsActions.appendChild(btn);
+    } else if (s.running) {
+      ttsDot.className = "dot starting";
+      ttsSub.textContent = "Starting on :" + s.port + "\u2026";
+      const btn = document.createElement("button");
+      btn.textContent = "Stop";
+      btn.addEventListener("click", doStopTts);
+      ttsActions.appendChild(btn);
+    } else {
+      ttsDot.className = "dot";
+      ttsSub.textContent = "Stopped";
+      const startBtn = document.createElement("button");
+      startBtn.className = "primary";
+      startBtn.textContent = "Start";
+      startBtn.addEventListener("click", doStartTts);
+      ttsActions.appendChild(startBtn);
+      const reinstallBtn = document.createElement("button");
+      reinstallBtn.textContent = "Reinstall";
+      reinstallBtn.addEventListener("click", doInstallTts);
+      ttsActions.appendChild(reinstallBtn);
+    }
+  }
+
+  async function doInstallTts() {
+    ttsActions.innerHTML = "";
+    ttsDot.className = "dot starting";
+    ttsSub.textContent = "Installing\u2026";
+    ttsProgressEl.style.display = "";
+    ttsProgressEl.textContent = "Downloading ~1.2 GB model, this may take a few minutes\u2026";
+    try {
+      const result = await invoke("install_tts");
+      ttsProgressEl.textContent = "\u2713 " + (result || "Installed successfully");
+      toast("Qwen3-TTS installed");
+      refreshTts();
+    } catch (err) {
+      ttsProgressEl.innerHTML = "";
+      ttsProgressEl.textContent = "\u2717 " + err;
+      const logBtn = document.createElement("button");
+      logBtn.textContent = "View Install Log";
+      logBtn.style.cssText = "margin-top:6px;font-size:11px;padding:3px 8px;display:block";
+      logBtn.addEventListener("click", async () => {
+        try {
+          const log = await invoke("tts_install_log");
+          const pre = document.createElement("pre");
+          pre.style.cssText = "max-height:200px;overflow:auto;font-size:10px;padding:6px;" +
+            "background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-top:4px;" +
+            "white-space:pre-wrap;word-break:break-all;";
+          pre.textContent = log;
+          logBtn.replaceWith(pre);
+        } catch (e) {
+          toast("Failed to read log: " + e, "error");
+        }
+      });
+      ttsProgressEl.appendChild(logBtn);
+      toast("Install failed: " + err, "error");
+      refreshTts();
+    }
+  }
+
+  async function doStartTts() {
+    ttsDot.className = "dot starting";
+    ttsSub.textContent = "Starting\u2026";
+    ttsActions.innerHTML = "";
+    try {
+      await invoke("start_tts");
+      toast("TTS server started");
+    } catch (err) {
+      toast("Failed to start TTS: " + err, "error");
+    }
+    refreshTts();
+  }
+
+  async function doStopTts() {
+    try {
+      await invoke("stop_tts");
+      toast("TTS server stopped");
+    } catch (err) {
+      toast("Failed to stop TTS: " + err, "error");
+    }
+    refreshTts();
+  }
+
+  async function refreshTts() {
+    try {
+      const s = await invoke("tts_status");
+      renderTtsCompact(s);
+    } catch (err) {
+      ttsDot.className = "dot";
+      ttsSub.textContent = "Error";
+      ttsActions.innerHTML = "";
+    }
+  }
+
+  // ─── updates (banner + expanded panel) ─────────────────────────
+
+  const updateBanner = document.getElementById("update-banner");
+  const updateBannerText = document.getElementById("update-banner-text");
+  const updateBannerBtn = document.getElementById("update-banner-btn");
+  const updatesPanel = document.getElementById("updates-panel");
   const updatesTitle = document.getElementById("updates-title");
   const updatesBody = document.getElementById("updates-body");
   const checkUpdatesBtn = document.getElementById("check-updates-btn");
+  const closeUpdatesBtn = document.getElementById("close-updates-btn");
+
+  let lastReport = null;
 
   const COMPONENT_INSTALL_MAP = {
     "Tianshu Server": { sub: "server", package: "@tianshu-ai/tianshu" },
     "Local Bridge": { sub: "bridge", package: "@tianshu-ai/local-bridge" },
-    // Launcher doesn't have a 'sub' — it links to the releases page.
   };
 
+  function showUpdateBanner(report) {
+    if (!report || !report.any_update) {
+      updateBanner.style.display = "none";
+      return;
+    }
+    const updates = report.components.filter((c) => c.update_available);
+    if (updates.length === 1) {
+      updateBannerText.textContent =
+        "\u2B06 " + updates[0].name + " " + updates[0].latest + " available";
+    } else {
+      updateBannerText.textContent = "\u2B06 " + updates.length + " updates available";
+    }
+    updateBanner.style.display = "";
+  }
+
+  updateBannerBtn.addEventListener("click", () => {
+    if (lastReport) {
+      updateBanner.style.display = "none";
+      updatesPanel.style.display = "";
+      renderUpdates(lastReport);
+    }
+  });
+
+  closeUpdatesBtn.addEventListener("click", () => {
+    updatesPanel.style.display = "none";
+    if (lastReport && lastReport.any_update) {
+      showUpdateBanner(lastReport);
+    }
+  });
+
   function renderUpdates(report) {
-    updatesBody.classList.add("visible");
     updatesBody.innerHTML = "";
     updatesTitle.className = "";
     if (!report) {
@@ -570,12 +675,10 @@
         vers.innerHTML =
           c.current + " \u2192 <span class=\"new\">" + c.latest + "</span>";
       } else if (c.latest === "unknown") {
-        // Offline, or GitHub release doesn't exist yet (first launch
-        // before v1.0.0).
         vers.innerHTML = c.current + " <span class=\"tag\">\u2014</span>";
       } else {
         const tagLabel = report.channel === "next" ? "next" : "latest";
-      vers.innerHTML = c.current + " <span class=\"tag\">" + tagLabel + "</span>";
+        vers.innerHTML = c.current + " <span class=\"tag\">" + tagLabel + "</span>";
       }
       row.appendChild(vers);
       updatesBody.appendChild(row);
@@ -608,7 +711,6 @@
     checkUpdatesBtn.disabled = true;
     updatesTitle.textContent = "Updating\u2026";
 
-    // Build a progress list so the user sees each step.
     const progressEl = document.createElement("div");
     progressEl.className = "update-progress";
     updatesBody.innerHTML = "";
@@ -686,17 +788,15 @@
       }
 
       if (allOk && (payloadUpdates.length > 0 || launcherUpdate)) {
+        try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
         addLine("Restarting to apply updates\u2026", "pending");
         await new Promise((r) => setTimeout(r, 600));
         try {
           await invoke("restart_launcher");
         } catch (_) {
-          // restart_launcher kills the process; invoke may reject.
-          // That's normal. If we're still alive, re-check versions.
           updatesTitle.textContent = "Updated";
           updatesTitle.className = "success";
           checkUpdatesBtn.disabled = false;
-          checkUpdatesBtn.click(); // re-check to show new versions
         }
       } else if (!allOk) {
         updatesTitle.textContent = "Some updates failed";
@@ -715,24 +815,89 @@
     }
   }
 
+  // Settings tab: manual check button
   checkUpdatesBtn.addEventListener("click", async () => {
     checkUpdatesBtn.disabled = true;
-    updatesTitle.textContent = "Checking\u2026";
-    updatesBody.classList.add("visible");
-    updatesBody.innerHTML = "<div class=\"empty\">Fetching versions\u2026</div>";
+    checkUpdatesBtn.textContent = "Checking\u2026";
     try {
       const report = await invoke("check_updates");
-      renderUpdates(report);
+      lastReport = report;
+      if (report.any_update) {
+        const count = report.components.filter((c) => c.update_available).length;
+        try { await invoke("set_update_badge", { count }); } catch (_) {}
+        // Switch to Server tab and show expanded panel
+        document.querySelectorAll(".tab").forEach((t) =>
+          t.classList.toggle("active", t.dataset.tab === "server"),
+        );
+        document.querySelectorAll(".tab-panel").forEach((p) =>
+          p.classList.toggle("active", p.id === "tab-server"),
+        );
+        updateBanner.style.display = "none";
+        updatesPanel.style.display = "";
+        renderUpdates(report);
+      } else {
+        try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
+        toast("All up to date");
+      }
     } catch (err) {
       toast("Check failed: " + err, "error");
       console.error(err);
-      updatesTitle.textContent = "Check failed";
-      updatesBody.innerHTML = "<div class=\"empty\">" + err + "</div>";
     } finally {
       checkUpdatesBtn.disabled = false;
+      checkUpdatesBtn.textContent = "Check for Updates";
     }
   });
 
+  // Background update check: 30s after launch, then every 4 hours
+  async function backgroundUpdateCheck() {
+    try {
+      const report = await invoke("check_updates");
+      lastReport = report;
+      if (report.any_update) {
+        const count = report.components.filter((c) => c.update_available).length;
+        try { await invoke("set_update_badge", { count }); } catch (_) {}
+        showUpdateBanner(report);
+      } else {
+        try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
+        updateBanner.style.display = "none";
+      }
+    } catch (err) {
+      console.error("background update check:", err);
+    }
+  }
+
+  setTimeout(backgroundUpdateCheck, 30000);
+  setInterval(backgroundUpdateCheck, 4 * 60 * 60 * 1000);
+
+  // ─── settings ───────────────────────────────────────────────────
+
+  const updateChannelSelect = document.getElementById("update-channel-select");
+  const registryInput = document.getElementById("npm-registry-input");
+  const pipIndexInput = document.getElementById("pip-index-input");
+  const pythonMirrorInput = document.getElementById("python-mirror-input");
+  const saveSettingsBtn = document.getElementById("save-settings-btn");
+
+  invoke("get_launcher_settings").then((s) => {
+    if (s && s.update_channel) updateChannelSelect.value = s.update_channel;
+    if (s && s.npm_registry) registryInput.value = s.npm_registry;
+    if (s && s.pip_index) pipIndexInput.value = s.pip_index;
+    if (s && s.python_mirror) pythonMirrorInput.value = s.python_mirror;
+  }).catch(() => {});
+
+  saveSettingsBtn.addEventListener("click", async () => {
+    const channel = updateChannelSelect.value || null;
+    const npm = registryInput.value.trim() || null;
+    const pip = pipIndexInput.value.trim() || null;
+    const pyMirror = pythonMirrorInput.value.trim() || null;
+    try {
+      await invoke("set_launcher_settings", {
+        settings: { update_channel: channel, npm_registry: npm, pip_index: pip, python_mirror: pyMirror }
+      });
+      toast("Settings saved");
+    } catch (err) {
+      toast("Failed to save: " + err, "error");
+    }
+  });
 
   // ─── wire up ────────────────────────────────────────────────────
 
@@ -743,175 +908,9 @@
 
   refreshServer();
   refreshBridge();
-  // Light polling for bridge status (child processes can die
-  // between events; the WS reconnect loop happens inside the bridge).
-  setInterval(refreshBridge, 5000);
-
-  // ─── TTS Server management ──────────────────────────────────
-
-  const ttsBadge = document.getElementById("tts-status-badge");
-  const ttsNotInstalled = document.getElementById("tts-not-installed");
-  const ttsInstalled = document.getElementById("tts-installed");
-  const installTtsBtn = document.getElementById("install-tts-btn");
-  const installTtsProgress = document.getElementById("install-tts-progress");
-  const startTtsBtn = document.getElementById("start-tts-btn");
-  const stopTtsBtn = document.getElementById("stop-tts-btn");
-  const ttsPid = document.getElementById("tts-pid");
-
-  function renderTtsStatus(s) {
-    if (!s.installed) {
-      ttsBadge.textContent = "not installed";
-      ttsBadge.style.color = "var(--fg-dim)";
-      ttsNotInstalled.style.display = "";
-      ttsInstalled.style.display = "none";
-    } else if (s.running && s.ready) {
-      ttsBadge.textContent = "ready";
-      ttsBadge.style.color = "#4ade80";
-    } else if (s.running) {
-      ttsBadge.textContent = "starting\u2026";
-      ttsBadge.style.color = "#facc15";
-      ttsNotInstalled.style.display = "none";
-      ttsInstalled.style.display = "";
-      startTtsBtn.disabled = true;
-      stopTtsBtn.disabled = false;
-      ttsPid.textContent = s.pid ? "pid " + s.pid : "";
-    } else {
-      ttsBadge.textContent = "stopped";
-      ttsBadge.style.color = "var(--fg-dim)";
-      ttsNotInstalled.style.display = "none";
-      ttsInstalled.style.display = "";
-      startTtsBtn.disabled = false;
-      stopTtsBtn.disabled = true;
-      ttsPid.textContent = "";
-    }
-  }
-
-  async function refreshTts() {
-    try {
-      const s = await invoke("tts_status");
-      renderTtsStatus(s);
-    } catch (err) {
-      ttsBadge.textContent = "error";
-      ttsBadge.style.color = "#f87171";
-    }
-  }
-
-  installTtsBtn.addEventListener("click", async () => {
-    installTtsBtn.disabled = true;
-    installTtsProgress.style.display = "";
-    installTtsProgress.textContent = "Installing\u2026 this may take a few minutes (downloading ~1.2 GB model)";
-    try {
-      const result = await invoke("install_tts");
-      installTtsProgress.textContent = "\u2713 " + (result || "Installed successfully");
-      toast("Qwen3-TTS installed", "ok");
-      refreshTts();
-    } catch (err) {
-      installTtsProgress.textContent = "\u2717 " + err;
-      appendInstallLogBtn(installTtsProgress);
-      toast("Install failed: " + err, "error");
-      installTtsBtn.disabled = false;
-    }
-  });
-
-  const reinstallTtsBtn = document.getElementById("reinstall-tts-btn");
-  reinstallTtsBtn.addEventListener("click", async () => {
-    reinstallTtsBtn.disabled = true;
-    reinstallTtsBtn.textContent = "Reinstalling\u2026";
-    try {
-      const result = await invoke("install_tts");
-      toast("Reinstalled: " + (result || "OK"), "ok");
-      refreshTts();
-    } catch (err) {
-      toast("Reinstall failed: " + err, "error");
-      appendInstallLogBtn(reinstallTtsBtn.parentElement);
-    }
-    reinstallTtsBtn.disabled = false;
-    reinstallTtsBtn.textContent = "Reinstall";
-  });
-
-  function appendInstallLogBtn(container) {
-    // Remove any existing log button first
-    const existing = container.parentElement?.querySelector(".tts-install-log-btn");
-    if (existing) existing.remove();
-    const btn = document.createElement("button");
-    btn.textContent = "View Install Log";
-    btn.className = "tts-install-log-btn";
-    btn.style.cssText = "margin-top:6px;font-size:11px;";
-    btn.addEventListener("click", async () => {
-      try {
-        const log = await invoke("tts_install_log");
-        const pre = document.createElement("pre");
-        pre.style.cssText = "max-height:200px;overflow:auto;font-size:11px;padding:6px;" +
-          "background:var(--bg-raised);border:1px solid var(--border);border-radius:4px;margin-top:4px;" +
-          "white-space:pre-wrap;word-break:break-all;";
-        pre.textContent = log;
-        btn.replaceWith(pre);
-      } catch (e) {
-        toast("Failed to read install log: " + e, "error");
-      }
-    });
-    container.after(btn);
-  }
-
-  startTtsBtn.addEventListener("click", async () => {
-    startTtsBtn.disabled = true;
-    ttsBadge.textContent = "starting\u2026";
-    try {
-      const s = await invoke("start_tts");
-      renderTtsStatus(s);
-      toast("TTS server started", "ok");
-    } catch (err) {
-      toast("Failed to start TTS: " + err, "error");
-      refreshTts();
-    }
-  });
-
-  stopTtsBtn.addEventListener("click", async () => {
-    stopTtsBtn.disabled = true;
-    try {
-      const s = await invoke("stop_tts");
-      renderTtsStatus(s);
-      toast("TTS server stopped", "ok");
-    } catch (err) {
-      toast("Failed to stop TTS: " + err, "error");
-      refreshTts();
-    }
-  });
-
   refreshTts();
-  // Poll TTS status every 10s (process can die externally)
+  setInterval(refreshBridge, 5000);
   setInterval(refreshTts, 10000);
-
-  // ─── Settings: npm registry ─────────────────────────────────────
-
-  const updateChannelSelect = document.getElementById("update-channel-select");
-  const registryInput = document.getElementById("npm-registry-input");
-  const pipIndexInput = document.getElementById("pip-index-input");
-  const pythonMirrorInput = document.getElementById("python-mirror-input");
-  const saveRegistryBtn = document.getElementById("save-registry-btn");
-
-  // Load current settings
-  invoke("get_launcher_settings").then((s) => {
-    if (s && s.update_channel) updateChannelSelect.value = s.update_channel;
-    if (s && s.npm_registry) registryInput.value = s.npm_registry;
-    if (s && s.pip_index) pipIndexInput.value = s.pip_index;
-    if (s && s.python_mirror) pythonMirrorInput.value = s.python_mirror;
-  }).catch(() => {});
-
-  saveRegistryBtn.addEventListener("click", async () => {
-    const channel = updateChannelSelect.value || null;
-    const npm = registryInput.value.trim() || null;
-    const pip = pipIndexInput.value.trim() || null;
-    const pyMirror = pythonMirrorInput.value.trim() || null;
-    try {
-      await invoke("set_launcher_settings", {
-        settings: { update_channel: channel, npm_registry: npm, pip_index: pip, python_mirror: pyMirror }
-      });
-      toast("Settings saved", "ok");
-    } catch (err) {
-      toast("Failed to save: " + err, "error");
-    }
-  });
 
   console.log("[tianshu-launcher] UI ready");
 })();

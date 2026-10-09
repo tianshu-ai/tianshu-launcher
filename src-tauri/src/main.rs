@@ -40,6 +40,12 @@ use tauri::{
     Emitter, Manager, State,
 };
 
+/// Badge count for the tray icon update notification.
+#[derive(Default)]
+struct BadgeState {
+    count: Mutex<u32>,
+}
+
 /// Handles to tray MenuItems whose labels change with state. Stored
 /// as app-managed state so refresh_tray can mutate them from any
 /// thread without re-building the menu.
@@ -74,8 +80,16 @@ fn refresh_tray(app: &tauri::AppHandle) {
     let active = server_running || any_bridge;
 
     if let Some(tray) = app.tray_by_id("main") {
-        let bytes: &[u8] = if active { ICON_RUNNING } else { ICON_STOPPED };
-        if let Ok(img) = tauri::image::Image::from_bytes(bytes) {
+        let base_bytes: &[u8] = if active { ICON_RUNNING } else { ICON_STOPPED };
+        let badge_count = app.try_state::<BadgeState>()
+            .map(|s| *s.count.lock().unwrap())
+            .unwrap_or(0);
+        let icon_bytes = if badge_count > 0 {
+            overlay_badge(base_bytes, badge_count)
+        } else {
+            base_bytes.to_vec()
+        };
+        if let Ok(img) = tauri::image::Image::from_bytes(&icon_bytes) {
             let _ = tray.set_icon(Some(img));
         }
     }
@@ -197,6 +211,94 @@ fn rebuild_bridge_submenu(
 
 static ICON_STOPPED: &[u8] = include_bytes!("../icons/tray/stopped.png");
 static ICON_RUNNING: &[u8] = include_bytes!("../icons/tray/running.png");
+
+/// Overlay a red circle badge with a white digit on a PNG tray icon.
+/// Returns the composited PNG bytes, or the original bytes on error.
+fn overlay_badge(base_png: &[u8], count: u32) -> Vec<u8> {
+    use image::{DynamicImage, Rgba};
+
+    let img = match image::load_from_memory(base_png) {
+        Ok(i) => i,
+        Err(_) => return base_png.to_vec(),
+    };
+    let mut img = img.to_rgba8();
+    let (w, h) = (img.width() as i32, img.height() as i32);
+
+    // Badge sizing: ~28% of icon, positioned top-right
+    let r = (w.min(h) as f64 * 0.28).round() as i32;
+    let cx = w - r - 1;
+    let cy = r + 1;
+    let r_sq = r * r;
+
+    // Draw filled red circle
+    let red = Rgba([239u8, 68, 68, 255]);
+    for py in 0..h {
+        for px in 0..w {
+            let dx = px - cx;
+            let dy = py - cy;
+            if dx * dx + dy * dy <= r_sq {
+                img.put_pixel(px as u32, py as u32, red);
+            }
+        }
+    }
+
+    // 3×5 bitmap font for digits 0–9
+    #[rustfmt::skip]
+    static GLYPHS: [[u8; 5]; 10] = [
+        [0b111, 0b101, 0b101, 0b101, 0b111], // 0
+        [0b010, 0b110, 0b010, 0b010, 0b111], // 1
+        [0b111, 0b001, 0b111, 0b100, 0b111], // 2
+        [0b111, 0b001, 0b111, 0b001, 0b111], // 3
+        [0b101, 0b101, 0b111, 0b001, 0b001], // 4
+        [0b111, 0b100, 0b111, 0b001, 0b111], // 5
+        [0b111, 0b100, 0b111, 0b101, 0b111], // 6
+        [0b111, 0b001, 0b010, 0b010, 0b010], // 7
+        [0b111, 0b101, 0b111, 0b101, 0b111], // 8
+        [0b111, 0b101, 0b111, 0b001, 0b111], // 9
+    ];
+
+    let digit = count.min(9) as usize;
+    let glyph = &GLYPHS[digit];
+    // Scale glyph to fit inside badge circle (~70% of diameter)
+    let scale = ((r as f64 * 1.4) / 5.0).floor().max(1.0) as i32;
+    let gw = 3 * scale;
+    let gh = 5 * scale;
+    let gx0 = cx - gw / 2;
+    let gy0 = cy - gh / 2;
+    let white = Rgba([255u8, 255, 255, 255]);
+
+    for row in 0..5i32 {
+        for col in 0..3i32 {
+            if glyph[row as usize] & (1 << (2 - col)) != 0 {
+                for sy in 0..scale {
+                    for sx in 0..scale {
+                        let px = gx0 + col * scale + sx;
+                        let py = gy0 + row * scale + sy;
+                        if px >= 0 && px < w && py >= 0 && py < h {
+                            img.put_pixel(px as u32, py as u32, white);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Encode back to PNG
+    let dyn_img = DynamicImage::ImageRgba8(img);
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    match dyn_img.write_to(&mut cursor, image::ImageFormat::Png) {
+        Ok(_) => cursor.into_inner(),
+        Err(_) => base_png.to_vec(),
+    }
+}
+
+#[tauri::command]
+fn set_update_badge(count: u32, app: tauri::AppHandle) {
+    if let Some(state) = app.try_state::<BadgeState>() {
+        *state.count.lock().unwrap() = count;
+    }
+    refresh_tray(&app);
+}
 
 // ─── child-process state ────────────────────────────────────────────
 
@@ -1864,6 +1966,7 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ProcState::default())
         .manage(TrayItems::default())
+        .manage(BadgeState::default())
         .setup(|app| {
             // Grouped tray menu. Tauri 2 doesn't expose NSMenuItem
             // image/icon APIs cross-platform, so emoji glyphs in the
@@ -2129,7 +2232,8 @@ fn main() {
             stop_tts,
             tts_log,
             tts_install_log,
-            restart_launcher
+            restart_launcher,
+            set_update_badge
         ])
         .on_window_event(|window, event| {
             // Hide window on close instead of quitting; tray stays alive.

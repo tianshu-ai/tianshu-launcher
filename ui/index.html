@@ -89,12 +89,6 @@
       padding: 12px 14px;
       margin-bottom: 10px;
     }
-    .card.row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }
     .card-row {
       display: flex;
       align-items: center;
@@ -167,8 +161,6 @@
     button.danger:hover { background: rgba(239, 68, 68, 0.08); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     .btn-group { display: flex; gap: 6px; }
-
-
 
     /* Profile edit form */
     .profile-card {
@@ -246,7 +238,6 @@
       margin-top: 4px;
       gap: 6px;
     }
-
     .empty {
       text-align: center;
       padding: 24px;
@@ -277,13 +268,35 @@
     .toast.visible { opacity: 1; }
     .toast.error { border-color: var(--danger); color: var(--danger); }
 
-    /* Updates panel — secondary surface at the bottom, outside the
-     * main card stack so it reads as metadata rather than primary
-     * content. Collapsed by default; expands on 'Check'. */
-    .updates-card {
-      margin-top: 20px;
+    /* Update banner — compact strip at bottom of Server tab */
+    .update-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
       padding: 8px 12px;
-      background: transparent;
+      margin-top: 10px;
+      background: rgba(201, 169, 110, 0.06);
+      border: 1px solid rgba(201, 169, 110, 0.2);
+      border-radius: 8px;
+      font-size: 12px;
+      color: var(--accent);
+    }
+    .update-banner button {
+      font-size: 11px;
+      padding: 3px 10px;
+      color: var(--accent);
+      border-color: rgba(201, 169, 110, 0.3);
+    }
+    .update-banner button:hover {
+      background: rgba(201, 169, 110, 0.12);
+    }
+
+    /* Updates expanded panel */
+    .updates-panel {
+      margin-top: 6px;
+      padding: 10px 14px;
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
     }
@@ -292,21 +305,14 @@
       align-items: center;
       justify-content: space-between;
       gap: 10px;
+      margin-bottom: 8px;
     }
     #updates-title {
       font-size: 12px;
-      color: var(--fg-muted);
+      font-weight: 500;
     }
-    #updates-title.success { color: var(--fg); }
+    #updates-title.success { color: #4ade80; }
     #updates-title.warn { color: var(--accent); }
-    #check-updates-btn { font-size: 11px; padding: 4px 10px; }
-    .updates-body { display: none; }
-    .updates-body.visible {
-      display: block;
-      margin-top: 8px;
-      padding-top: 8px;
-      border-top: 1px solid var(--border);
-    }
     .version-row {
       display: flex;
       align-items: center;
@@ -369,6 +375,35 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* TTS progress (inside compact card) */
+    .tts-progress {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--fg-muted);
+    }
+
+    /* Settings card */
+    .settings-card .form-row {
+      margin-bottom: 10px;
+    }
+    .settings-card .form-row label {
+      width: 84px;
+    }
+    .settings-card .form-row input[type="text"],
+    .settings-card .form-row select {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    .settings-footer {
+      margin-top: 10px;
+      text-align: center;
+    }
+    .settings-footer button {
+      font-size: 12px;
+      padding: 5px 14px;
+    }
+
     .footer {
       margin-top: 14px;
       padding-top: 12px;
@@ -389,6 +424,7 @@
       Local Bridge
       <span class="tab-badge" id="bridge-badge">0</span>
     </div>
+    <div class="tab" data-tab="settings">Settings</div>
   </div>
 
   <!-- Server tab -->
@@ -404,9 +440,39 @@
         </div>
         <div class="btn-group">
           <button id="server-btn" class="primary">Start</button>
-          <button id="open-ui-btn" disabled>Open →</button>
+          <button id="open-ui-btn" disabled>Open &rarr;</button>
         </div>
       </div>
+    </div>
+
+    <!-- TTS compact card -->
+    <div class="card" id="tts-card">
+      <div class="card-row">
+        <div class="card-info">
+          <div class="card-title">
+            <span class="dot" id="tts-dot"></span>
+            TTS Server
+          </div>
+          <div class="card-sub" id="tts-sub">Checking&hellip;</div>
+        </div>
+        <div class="btn-group" id="tts-actions"></div>
+      </div>
+      <div id="tts-progress" class="tts-progress" style="display:none"></div>
+    </div>
+
+    <!-- Update banner (hidden until background check finds updates) -->
+    <div id="update-banner" class="update-banner" style="display:none">
+      <span id="update-banner-text"></span>
+      <button id="update-banner-btn">Update</button>
+    </div>
+
+    <!-- Expanded update panel (shown when user clicks Update) -->
+    <div id="updates-panel" class="updates-panel" style="display:none">
+      <div class="updates-head">
+        <span id="updates-title">Updates</span>
+        <button id="close-updates-btn" style="font-size:11px;padding:3px 8px">Close</button>
+      </div>
+      <div id="updates-body"></div>
     </div>
   </div>
 
@@ -415,90 +481,43 @@
     <div id="profile-list"></div>
     <div class="add-row">
       <button id="add-profile-btn">+ Add Profile</button>
-      <button id="paste-profile-btn">📋 Paste from Clipboard</button>
+      <button id="paste-profile-btn">&#x1F4CB; Paste from Clipboard</button>
     </div>
   </div>
 
-  <!-- Updates panel (bottom; collapsed by default) -->
-  <div class="updates-card">
-    <div class="updates-head">
-      <span id="updates-title">Updates</span>
+  <!-- Settings tab -->
+  <div id="tab-settings" class="tab-panel">
+    <div class="card settings-card">
+      <div class="form-row">
+        <label>Channel</label>
+        <select id="update-channel-select">
+          <option value="stable">Stable (latest releases)</option>
+          <option value="next">Next (pre-release)</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>npm Registry</label>
+        <input id="npm-registry-input" type="text" placeholder="https://registry.npmmirror.com">
+      </div>
+      <div class="form-row">
+        <label>PyPI Index</label>
+        <input id="pip-index-input" type="text" placeholder="https://pypi.tuna.tsinghua.edu.cn/simple">
+      </div>
+      <div class="form-row">
+        <label>Python Mirror</label>
+        <input id="python-mirror-input" type="text" placeholder="https://mirrors.aliyun.com/...">
+      </div>
+      <div class="form-row actions">
+        <button id="save-settings-btn" class="primary">Save</button>
+      </div>
+    </div>
+    <div class="settings-footer">
       <button id="check-updates-btn">Check for Updates</button>
-    </div>
-    <div id="updates-body" class="updates-body"></div>
-  </div>
-
-  <!-- TTS Server -->
-  <div class="updates-card" style="margin-top:6px">
-    <div class="updates-head">
-      <span>TTS Server</span>
-      <span id="tts-status-badge" style="font-size:11px;padding:2px 8px;border-radius:9px;background:var(--bg-raised);color:var(--fg-dim)">checking…</span>
-    </div>
-    <div id="tts-body" style="padding:8px 12px">
-      <div id="tts-not-installed" style="display:none">
-        <p style="font-size:12px;color:var(--fg-dim);margin:0 0 8px">Qwen3-TTS is not installed. Click Install to set up the local TTS server (~1.2 GB download).</p>
-        <button id="install-tts-btn" style="padding:4px 12px;font-size:12px">Install Qwen3-TTS</button>
-        <div id="install-tts-progress" style="display:none;margin-top:8px;font-size:11px;color:var(--fg-dim)"></div>
-      </div>
-      <div id="tts-installed" style="display:none">
-        <div style="display:flex;gap:6px;align-items:center">
-          <button id="start-tts-btn" style="padding:4px 12px;font-size:12px">Start</button>
-          <button id="stop-tts-btn" style="padding:4px 12px;font-size:12px" disabled>Stop</button>
-          <button id="reinstall-tts-btn" style="padding:4px 12px;font-size:12px">Reinstall</button>
-          <span id="tts-pid" style="font-size:11px;color:var(--fg-dim)"></span>
-        </div>
-        <p style="font-size:11px;color:var(--fg-dim);margin:6px 0 0">Port: 50000 · Voice: yujie</p>
-      </div>
-    </div>
-  </div>
-
-  <!-- Settings -->
-  <div class="updates-card" style="margin-top:6px">
-    <div class="updates-head">
-      <span>Settings</span>
-    </div>
-    <div style="padding:8px 12px">
-      <label style="font-size:12px;color:var(--fg-dim);display:block;margin-bottom:4px">
-        Update Channel
-      </label>
-      <select id="update-channel-select"
-        style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);
-               background:var(--bg-raised);color:var(--fg);font-size:12px;margin-bottom:8px;width:100%">
-        <option value="stable">Stable (latest releases)</option>
-        <option value="next">Next (pre-release)</option>
-      </select>
-      <label style="font-size:12px;color:var(--fg-dim);display:block;margin-bottom:4px">
-        npm Registry (leave empty for default)
-      </label>
-      <div style="display:flex;gap:6px">
-        <input id="npm-registry-input" type="text" placeholder="https://registry.npmmirror.com"
-          style="flex:1;padding:4px 8px;border-radius:4px;border:1px solid var(--border);
-                 background:var(--bg-raised);color:var(--fg);font-size:12px;font-family:monospace">
-      </div>
-      <label style="font-size:12px;color:var(--fg-dim);display:block;margin:8px 0 4px">
-        PyPI Index (leave empty for default)
-      </label>
-      <div style="display:flex;gap:6px">
-        <input id="pip-index-input" type="text" placeholder="https://pypi.tuna.tsinghua.edu.cn/simple"
-          style="flex:1;padding:4px 8px;border-radius:4px;border:1px solid var(--border);
-                 background:var(--bg-raised);color:var(--fg);font-size:12px;font-family:monospace">
-      </div>
-      <label style="font-size:12px;color:var(--fg-dim);display:block;margin:8px 0 4px">
-        Python Mirror (leave empty for default aliyun mirror)
-      </label>
-      <div style="display:flex;gap:6px">
-        <input id="python-mirror-input" type="text" placeholder="https://mirrors.aliyun.com/github/releases/astral-sh/python-build-standalone"
-          style="flex:1;padding:4px 8px;border-radius:4px;border:1px solid var(--border);
-                 background:var(--bg-raised);color:var(--fg);font-size:12px;font-family:monospace">
-      </div>
-      <div style="margin-top:8px">
-        <button id="save-registry-btn" style="padding:4px 10px;font-size:12px">Save</button>
-      </div>
     </div>
   </div>
 
   <div class="footer">
-    Server: <code>~/.tianshu/</code> · Bridge: <code>~/.tianshu-bridge/</code>
+    Server: <code>~/.tianshu/</code> &middot; Bridge: <code>~/.tianshu-bridge/</code>
   </div>
 
   <div class="toast" id="toast"></div>
