@@ -818,8 +818,11 @@ fn is_update_available(current: &str, latest: &str) -> bool {
                 (None, None) => false,
                 // current is pre, latest is stable → update
                 (Some(_), None) => true,
-                // current is stable, latest is pre → no update (don't downgrade)
-                (None, Some(_)) => false,
+                // current is stable, latest is pre → update available.
+                // This only happens on the Next channel (Stable queries
+                // npm `latest` which never returns pre-release versions).
+                // The next build contains commits beyond the stable release.
+                (None, Some(_)) => true,
                 // both pre-release → compare pre-release number
                 (Some(c), Some(l)) => l > c,
             }
