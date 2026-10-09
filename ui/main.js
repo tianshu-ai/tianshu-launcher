@@ -807,6 +807,7 @@
       refreshTts();
     } catch (err) {
       installTtsProgress.textContent = "\u2717 " + err;
+      appendInstallLogBtn(installTtsProgress);
       toast("Install failed: " + err, "error");
       installTtsBtn.disabled = false;
     }
@@ -822,10 +823,35 @@
       refreshTts();
     } catch (err) {
       toast("Reinstall failed: " + err, "error");
+      appendInstallLogBtn(reinstallTtsBtn.parentElement);
     }
     reinstallTtsBtn.disabled = false;
     reinstallTtsBtn.textContent = "Reinstall";
   });
+
+  function appendInstallLogBtn(container) {
+    // Remove any existing log button first
+    const existing = container.parentElement?.querySelector(".tts-install-log-btn");
+    if (existing) existing.remove();
+    const btn = document.createElement("button");
+    btn.textContent = "View Install Log";
+    btn.className = "tts-install-log-btn";
+    btn.style.cssText = "margin-top:6px;font-size:11px;";
+    btn.addEventListener("click", async () => {
+      try {
+        const log = await invoke("tts_install_log");
+        const pre = document.createElement("pre");
+        pre.style.cssText = "max-height:200px;overflow:auto;font-size:11px;padding:6px;" +
+          "background:var(--bg-raised);border:1px solid var(--border);border-radius:4px;margin-top:4px;" +
+          "white-space:pre-wrap;word-break:break-all;";
+        pre.textContent = log;
+        btn.replaceWith(pre);
+      } catch (e) {
+        toast("Failed to read install log: " + e, "error");
+      }
+    });
+    container.after(btn);
+  }
 
   startTtsBtn.addEventListener("click", async () => {
     startTtsBtn.disabled = true;

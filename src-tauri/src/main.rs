@@ -1103,8 +1103,26 @@ fn ensure_standalone_python() -> Result<PathBuf, String> {
 
 /// Cross-platform TTS install: download standalone Python, create venv, pip install deps.
 fn install_tts_native() -> Result<String, String> {
+    let install_log = home_dir().join(".tianshu").join("tts-install.log");
+    // Truncate previous log
+    let _ = std::fs::create_dir_all(home_dir().join(".tianshu"));
+    let _ = std::fs::write(&install_log, "");
+    let log_append = |msg: &str| {
+        let _ = std::fs::OpenOptions::new().create(true).append(true)
+            .open(&install_log).and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "{msg}")
+            });
+        println!("{msg}");
+    };
+
     // Step 1: Ensure standalone Python is available
-    let python = ensure_standalone_python()?;
+    log_append("[tts] ensuring standalone Python ...");
+    let python = ensure_standalone_python().map_err(|e| {
+        log_append(&format!("[tts] Python setup failed: {e}"));
+        e
+    })?;
+    log_append(&format!("[tts] Python: {python:?}"));
 
     // Step 2: Create venv
     let venv_dir = home_dir().join(".tianshu").join("qwen-tts-venv");
@@ -1116,18 +1134,24 @@ fn install_tts_native() -> Result<String, String> {
 
     // Always recreate venv to ensure it uses the correct Python and is clean.
     // --clear wipes an existing venv before recreating.
-    println!("[tts] creating venv at {venv_dir:?} ...");
+    log_append(&format!("[tts] creating venv at {venv_dir:?} ..."));
     let out = Command::new(&python)
         .args(["-m", "venv", "--clear"])
         .arg(&venv_dir)
         .output()
-        .map_err(|e| format!("create venv: {e}"))?;
+        .map_err(|e| {
+            let msg = format!("create venv: {e}");
+            log_append(&msg);
+            msg
+        })?;
     if !out.status.success() {
-        return Err(format!("venv creation failed: {}", String::from_utf8_lossy(&out.stderr)));
+        let msg = format!("venv creation failed: {}", String::from_utf8_lossy(&out.stderr));
+        log_append(&msg);
+        return Err(msg);
     }
 
     // Step 3: pip install dependencies
-    println!("[tts] installing dependencies ...");
+    log_append("[tts] installing dependencies ...");
     let _ = run_cmd(&pip, &["install", "--upgrade", "pip"]);
 
     let is_mac_arm = cfg!(target_os = "macos") && cfg!(target_arch = "aarch64");
@@ -1136,6 +1160,7 @@ fn install_tts_native() -> Result<String, String> {
 
     // Helper to run pip install with optional index and CREATE_NO_WINDOW on Windows.
     let pip_install = |args: &[&str], index_url: Option<&str>| -> Result<(), String> {
+        log_append(&format!("[tts] pip install {}", args.join(" ")));
         let mut cmd = Command::new(&pip);
         cmd.arg("install");
         if let Some(idx) = index_url {
@@ -1150,12 +1175,19 @@ fn install_tts_native() -> Result<String, String> {
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        let out = cmd.output().map_err(|e| format!("pip install: {e}"))?;
+        let out = cmd.output().map_err(|e| {
+            let msg = format!("pip install spawn: {e}");
+            log_append(&msg);
+            msg
+        })?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            return Err(format!("pip install failed:\n{stderr}\n{stdout}"));
+            let msg = format!("pip install failed:\n{stderr}\n{stdout}");
+            log_append(&msg);
+            return Err(msg);
         }
+        log_append("[tts] pip install ok");
         Ok(())
     };
 
@@ -1169,10 +1201,10 @@ fn install_tts_native() -> Result<String, String> {
     } else if has_nvidia {
         backend_label = "faster-qwen3-tts (CUDA)";
         // Step 1: Install CUDA-enabled PyTorch first
-        println!("[tts] installing CUDA PyTorch ...");
+        log_append("[tts] installing CUDA PyTorch ...");
         pip_install(&["torch", "torchaudio"], Some("https://download.pytorch.org/whl/cu124"))?;
         // Step 2: Install faster-qwen3-tts (torch already satisfied → won't pull CPU version)
-        println!("[tts] installing TTS backends ...");
+        log_append("[tts] installing TTS backends ...");
         let mut deps: Vec<&str> = vec!["faster-qwen3-tts"];
         deps.extend_from_slice(&common_deps);
         pip_install(&deps, None)?;
@@ -1183,8 +1215,8 @@ fn install_tts_native() -> Result<String, String> {
         pip_install(&deps, None)?;
     };
 
-    println!("[tts] install complete (backend: {backend_label})");
-    Ok(format!("Installation complete ({backend_label}).\nVenv: {venv_dir:?}"))
+    log_append(&format!("[tts] install complete (backend: {backend_label})"));
+    Ok(format!("Installation complete ({backend_label}).\nVenv: {venv_dir:?}\nLog: {install_log:?}"))
 }
 
 /// Helper: run a command and return stdout, ignoring errors.
@@ -1282,6 +1314,12 @@ fn stop_tts(state: State<ProcState>) -> TtsStatus {
 fn tts_log() -> String {
     let log_path = home_dir().join(".tianshu").join("qwen-tts-server.log");
     std::fs::read_to_string(&log_path).unwrap_or_else(|_| "No log file found.".into())
+}
+
+#[tauri::command]
+fn tts_install_log() -> String {
+    let log_path = home_dir().join(".tianshu").join("tts-install.log");
+    std::fs::read_to_string(&log_path).unwrap_or_else(|_| "No install log found.".into())
 }
 
 /// Locate the bundled npm-cli.js shipped in resources/npm/.
@@ -2090,6 +2128,7 @@ fn main() {
             start_tts,
             stop_tts,
             tts_log,
+            tts_install_log,
             restart_launcher
         ])
         .on_window_event(|window, event| {
