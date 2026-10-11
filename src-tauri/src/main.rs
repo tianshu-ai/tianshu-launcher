@@ -932,7 +932,6 @@ fn is_update_available(current: &str, latest: &str) -> bool {
     }
 }
 
-#[tauri::command]
 #[derive(Serialize, Clone, Debug)]
 struct LocalVersions {
     launcher: String,
