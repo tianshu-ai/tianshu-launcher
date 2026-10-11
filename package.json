@@ -12,5 +12,8 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
+  },
+  "dependencies": {
+    "@tianshu-ai/tianshu": "^0.90.1-next.1730"
   }
 }

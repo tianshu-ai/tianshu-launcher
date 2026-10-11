@@ -815,30 +815,52 @@
     }
   }
 
-  // Settings tab: manual check button
+  // Settings tab: check button — shows inline version info + update button
   checkUpdatesBtn.addEventListener("click", async () => {
     checkUpdatesBtn.disabled = true;
     checkUpdatesBtn.textContent = "Checking\u2026";
+    // Clear previous inline results
+    const existing = checkUpdatesBtn.parentElement.querySelector(".inline-updates");
+    if (existing) existing.remove();
     try {
       const report = await invoke("check_updates");
       lastReport = report;
+      // Render version info inline next to the check button
+      const container = document.createElement("div");
+      container.className = "inline-updates";
+      report.components.forEach((c) => {
+        const row = document.createElement("div");
+        row.className = "inline-version-row";
+        if (c.update_available) {
+          row.innerHTML = "<span class=\"name\">" + c.name + "</span> " +
+            c.current + " \u2192 <span class=\"new\">" + c.latest + "</span>";
+        } else if (c.latest === "unknown") {
+          row.innerHTML = "<span class=\"name\">" + c.name + "</span> " + c.current;
+        } else {
+          row.innerHTML = "<span class=\"name\">" + c.name + "</span> " +
+            c.current + " <span class=\"tag\">\u2713</span>";
+        }
+        container.appendChild(row);
+      });
       if (report.any_update) {
         const count = report.components.filter((c) => c.update_available).length;
         try { await invoke("set_update_badge", { count }); } catch (_) {}
-        // Switch to Server tab and show expanded panel
-        document.querySelectorAll(".tab").forEach((t) =>
-          t.classList.toggle("active", t.dataset.tab === "server"),
-        );
-        document.querySelectorAll(".tab-panel").forEach((p) =>
-          p.classList.toggle("active", p.id === "tab-server"),
-        );
-        updateBanner.style.display = "none";
-        updatesPanel.style.display = "";
-        renderUpdates(report);
+        const btn = document.createElement("button");
+        btn.className = "primary";
+        btn.textContent = "Update Now";
+        btn.style.marginTop = "8px";
+        btn.addEventListener("click", () => {
+          updateBanner.style.display = "none";
+          updatesPanel.style.display = "";
+          renderUpdates(report);
+          applyUpdates(report);
+        });
+        container.appendChild(btn);
+        showUpdateBanner(report);
       } else {
         try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
-        toast("All up to date");
       }
+      checkUpdatesBtn.parentElement.appendChild(container);
     } catch (err) {
       toast("Check failed: " + err, "error");
       console.error(err);
