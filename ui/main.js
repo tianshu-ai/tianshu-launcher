@@ -625,6 +625,27 @@
     "Local Bridge": { sub: "bridge", package: "@tianshu-ai/local-bridge" },
   };
 
+  const serverVersionEl = document.getElementById("server-version");
+  const bridgeVersionEl = document.getElementById("bridge-version");
+
+  function updateVersionLabels(report) {
+    if (!report) return;
+    for (const c of report.components) {
+      if (c.name === "Tianshu Server" && serverVersionEl) {
+        serverVersionEl.textContent = c.update_available
+          ? "v" + c.current + " \u2192 v" + c.latest
+          : "v" + c.current;
+        serverVersionEl.style.color = c.update_available ? "var(--accent, #4f9)" : "";
+      }
+      if (c.name === "Local Bridge" && bridgeVersionEl) {
+        bridgeVersionEl.textContent = c.update_available
+          ? "v" + c.current + " \u2192 v" + c.latest
+          : "v" + c.current;
+        bridgeVersionEl.style.color = c.update_available ? "var(--accent, #4f9)" : "";
+      }
+    }
+  }
+
   function showUpdateBanner(report) {
     if (!report || !report.any_update) {
       updateBanner.style.display = "none";
@@ -825,6 +846,7 @@
     try {
       const report = await invoke("check_updates");
       lastReport = report;
+      updateVersionLabels(report);
       // Render version info inline next to the check button
       const container = document.createElement("div");
       container.className = "inline-updates";
@@ -875,6 +897,7 @@
     try {
       const report = await invoke("check_updates");
       lastReport = report;
+      updateVersionLabels(report);
       if (report.any_update) {
         const count = report.components.filter((c) => c.update_available).length;
         try { await invoke("set_update_badge", { count }); } catch (_) {}
@@ -933,6 +956,12 @@
   refreshTts();
   setInterval(refreshBridge, 5000);
   setInterval(refreshTts, 10000);
+
+  // Show local versions immediately (no network)
+  invoke("get_versions").then((v) => {
+    if (serverVersionEl) serverVersionEl.textContent = "v" + v.tianshu;
+    if (bridgeVersionEl) bridgeVersionEl.textContent = "v" + v.bridge;
+  }).catch(() => {});
 
   console.log("[tianshu-launcher] UI ready");
 })();

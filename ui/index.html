@@ -293,6 +293,17 @@
     }
 
     /* Updates expanded panel */
+    .card-version {
+      font-size: 11px;
+      color: var(--muted, #888);
+      margin-top: 2px;
+    }
+    .bridge-version {
+      font-size: 11px;
+      color: var(--muted, #888);
+      margin-bottom: 8px;
+      padding: 0 2px;
+    }
     .inline-updates {
       margin-top: 8px;
       font-size: 12px;
@@ -458,6 +469,7 @@
             Tianshu Server
           </div>
           <div class="card-sub" id="server-sub">Stopped</div>
+          <div class="card-version" id="server-version"></div>
         </div>
         <div class="btn-group">
           <button id="server-btn" class="primary">Start</button>
@@ -499,6 +511,7 @@
 
   <!-- Bridge tab -->
   <div id="tab-bridge" class="tab-panel">
+    <div class="card-version bridge-version" id="bridge-version"></div>
     <div id="profile-list"></div>
     <div class="add-row">
       <button id="add-profile-btn">+ Add Profile</button>

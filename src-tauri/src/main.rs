@@ -933,6 +933,23 @@ fn is_update_available(current: &str, latest: &str) -> bool {
 }
 
 #[tauri::command]
+#[derive(Serialize, Clone, Debug)]
+struct LocalVersions {
+    launcher: String,
+    tianshu: String,
+    bridge: String,
+}
+
+#[tauri::command]
+fn get_versions(app: tauri::AppHandle) -> LocalVersions {
+    LocalVersions {
+        launcher: env!("CARGO_PKG_VERSION").to_string(),
+        tianshu: read_payload_version(&app, "server", "@tianshu-ai/tianshu"),
+        bridge: read_payload_version(&app, "bridge", "@tianshu-ai/local-bridge"),
+    }
+}
+
+#[tauri::command]
 async fn check_updates(app: tauri::AppHandle) -> Result<VersionReport, String> {
     let launcher_current = env!("CARGO_PKG_VERSION").to_string();
     let tianshu_current = read_payload_version(&app, "server", "@tianshu-ai/tianshu");
@@ -2221,6 +2238,7 @@ fn main() {
             bridge_status,
             start_bridge_profile,
             stop_bridge_profile,
+            get_versions,
             check_updates,
             update_payload,
             update_launcher,
