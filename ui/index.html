@@ -304,6 +304,34 @@
       margin-bottom: 8px;
       padding: 0 2px;
     }
+    .log-panel {
+      margin-top: 6px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .log-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+    .log-body {
+      margin: 0;
+      padding: 10px 14px;
+      font-size: 11px;
+      font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+      line-height: 1.5;
+      max-height: 300px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: var(--muted, #aaa);
+    }
     .inline-updates {
       margin-top: 8px;
       font-size: 12px;
@@ -474,8 +502,18 @@
         <div class="btn-group">
           <button id="server-btn" class="primary">Start</button>
           <button id="open-ui-btn" disabled>Open &rarr;</button>
+          <button id="server-log-btn">Logs</button>
         </div>
       </div>
+    </div>
+
+    <!-- Server log panel -->
+    <div id="server-log-panel" class="log-panel" style="display:none">
+      <div class="log-head">
+        <span>Server Logs</span>
+        <button id="close-log-btn" style="font-size:11px;padding:3px 8px">Close</button>
+      </div>
+      <pre id="server-log-body" class="log-body"></pre>
     </div>
 
     <!-- TTS compact card -->

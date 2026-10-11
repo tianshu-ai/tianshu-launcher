@@ -611,6 +611,31 @@
 
   const updateBanner = document.getElementById("update-banner");
   const updateBannerText = document.getElementById("update-banner-text");
+  // Server log panel
+  const serverLogBtn = document.getElementById("server-log-btn");
+  const serverLogPanel = document.getElementById("server-log-panel");
+  const serverLogBody = document.getElementById("server-log-body");
+  const closeLogBtn = document.getElementById("close-log-btn");
+
+  serverLogBtn.addEventListener("click", async () => {
+    serverLogBtn.disabled = true;
+    try {
+      const log = await invoke("server_log");
+      serverLogBody.textContent = log || "(empty)";
+      serverLogPanel.style.display = "";
+      serverLogBody.scrollTop = serverLogBody.scrollHeight;
+    } catch (err) {
+      serverLogBody.textContent = "Failed to load: " + err;
+      serverLogPanel.style.display = "";
+    } finally {
+      serverLogBtn.disabled = false;
+    }
+  });
+
+  closeLogBtn.addEventListener("click", () => {
+    serverLogPanel.style.display = "none";
+  });
+
   const updateBannerBtn = document.getElementById("update-banner-btn");
   const updatesPanel = document.getElementById("updates-panel");
   const updatesTitle = document.getElementById("updates-title");

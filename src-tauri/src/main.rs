@@ -940,6 +940,17 @@ struct LocalVersions {
 }
 
 #[tauri::command]
+fn server_log() -> Result<String, String> {
+    let log_path = launcher_data_dir().join("logs").join("server.log");
+    let content = std::fs::read_to_string(&log_path)
+        .map_err(|e| format!("read {}: {e}", log_path.display()))?;
+    // Return last 200 lines
+    let lines: Vec<&str> = content.lines().collect();
+    let start = if lines.len() > 200 { lines.len() - 200 } else { 0 };
+    Ok(lines[start..].join("\n"))
+}
+
+#[tauri::command]
 fn get_versions(app: tauri::AppHandle) -> LocalVersions {
     LocalVersions {
         launcher: env!("CARGO_PKG_VERSION").to_string(),
@@ -2238,6 +2249,7 @@ fn main() {
             start_bridge_profile,
             stop_bridge_profile,
             get_versions,
+            server_log,
             check_updates,
             update_payload,
             update_launcher,
