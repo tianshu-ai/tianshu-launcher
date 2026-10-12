@@ -779,6 +779,9 @@
         toast("Update cancelled");
       } catch (err) {
         toast("Cancel: " + err, "error");
+      } finally {
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = "Cancel";
       }
     });
     cancelRow.appendChild(cancelBtn);
@@ -855,7 +858,16 @@
         }
       }
 
-      cancelRow.remove();
+      // Replace Cancel with Done button to dismiss overlay
+      cancelRow.innerHTML = "";
+      const doneBtn = document.createElement("button");
+      doneBtn.className = "primary";
+      doneBtn.textContent = "Done";
+      doneBtn.addEventListener("click", () => {
+        updatesOverlay.style.display = "none";
+      });
+      cancelRow.appendChild(doneBtn);
+
       if (allOk && (payloadUpdates.length > 0 || launcherUpdate)) {
         try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
         addLine("Restarting to apply updates\u2026", "pending");
