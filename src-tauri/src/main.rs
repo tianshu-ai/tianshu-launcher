@@ -1753,13 +1753,21 @@ fn install_payload_override_cancellable(sub: &str, package: &str, node: &Path, n
     }
 
     if !status.success() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        // If the PID was cleared by cancel_update, this is a user-initiated cancellation.
+        let was_cancelled = {
+            let state: State<ProcState> = app.state();
+            let x = state.update_pid.lock().unwrap().is_none(); x
+        };
+        if was_cancelled {
+            return Err("Cancelled".into());
+        }
         let stderr = child.stderr.take().map(|mut s| {
             let mut buf = String::new();
             use std::io::Read;
             let _ = s.read_to_string(&mut buf);
             buf
         }).unwrap_or_default();
-        let _ = std::fs::remove_dir_all(&tmp);
         return Err(format!("npm install failed (exit {}): {}", status, stderr.trim()));
     }
 
