@@ -611,8 +611,15 @@
         <button id="save-settings-btn" class="primary">Save</button>
       </div>
     </div>
-    <div class="settings-footer">
-      <button id="check-updates-btn">Check for Updates</button>
+    <!-- Updates card — always visible, auto-populates -->
+    <div class="card" id="updates-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-weight:500;font-size:13px">Updates</span>
+        <button id="check-updates-btn" style="font-size:11px;padding:3px 10px">Check</button>
+      </div>
+      <div id="updates-card-body">
+        <div style="color:var(--fg-muted);font-size:12px">Loading versions…</div>
+      </div>
     </div>
   </div>
 

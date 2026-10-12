@@ -911,76 +911,57 @@
     }
   }
 
-  // Settings tab: check button — shows inline version info + update button
-  checkUpdatesBtn.addEventListener("click", async () => {
+  // ─── updates card (always visible in Settings tab) ─────────────
+
+  const updatesCardBody = document.getElementById("updates-card-body");
+
+  function renderUpdatesCard(report) {
+    updatesCardBody.innerHTML = "";
+    if (!report) {
+      updatesCardBody.innerHTML = '<div style="color:var(--fg-muted);font-size:12px">Press Check to look for updates.</div>';
+      return;
+    }
+    report.components.forEach((c) => {
+      const row = document.createElement("div");
+      row.className = "inline-version-row";
+      const nameSpan = '<span class="name">' + c.name + '</span>';
+      if (c.update_available) {
+        row.innerHTML = nameSpan +
+          '<span class="vers">' + c.current + ' \u2192 <span class="new">' + c.latest + '</span></span>';
+      } else if (c.latest === "unknown") {
+        row.innerHTML = nameSpan + '<span class="vers">' + c.current + '</span>';
+      } else {
+        row.innerHTML = nameSpan +
+          '<span class="vers">' + c.current + ' <span class="tag">\u2713</span></span>';
+      }
+      updatesCardBody.appendChild(row);
+    });
+    if (report.any_update) {
+      const actions = document.createElement("div");
+      actions.style.cssText = "display:flex;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)";
+      const btn = document.createElement("button");
+      btn.className = "primary";
+      btn.textContent = "Update Now";
+      btn.addEventListener("click", () => {
+        updateBanner.style.display = "none";
+        updatesOverlay.style.display = "";
+        renderUpdates(report);
+        applyUpdates(report);
+      });
+      actions.appendChild(btn);
+      updatesCardBody.appendChild(actions);
+    }
+  }
+
+  // Shared check logic — populates the card + handles banner/badge
+  async function doCheckUpdates() {
     checkUpdatesBtn.disabled = true;
     checkUpdatesBtn.textContent = "Checking\u2026";
-    // Clear previous inline results
-    const existing = checkUpdatesBtn.parentElement.querySelector(".inline-updates");
-    if (existing) existing.remove();
     try {
       const report = await invoke("check_updates");
       lastReport = report;
       updateVersionLabels(report);
-      // Render version info in a card below the check button
-      const container = document.createElement("div");
-      container.className = "inline-updates";
-      const title = document.createElement("div");
-      title.className = "inline-updates-title";
-      title.textContent = report.any_update ? "Updates available" : "All up to date";
-      if (!report.any_update) title.style.color = "#4ade80";
-      container.appendChild(title);
-      report.components.forEach((c) => {
-        const row = document.createElement("div");
-        row.className = "inline-version-row";
-        const nameSpan = "<span class=\"name\">" + c.name + "</span>";
-        if (c.update_available) {
-          row.innerHTML = nameSpan +
-            "<span class=\"vers\">" + c.current + " \u2192 <span class=\"new\">" + c.latest + "</span></span>";
-        } else if (c.latest === "unknown") {
-          row.innerHTML = nameSpan + "<span class=\"vers\">" + c.current + "</span>";
-        } else {
-          row.innerHTML = nameSpan +
-            "<span class=\"vers\">" + c.current + " <span class=\"tag\">\u2713</span></span>";
-        }
-        container.appendChild(row);
-      });
-      if (report.any_update) {
-        const count = report.components.filter((c) => c.update_available).length;
-        try { await invoke("set_update_badge", { count }); } catch (_) {}
-        const actions = document.createElement("div");
-        actions.style.cssText = "display:flex;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)";
-        const btn = document.createElement("button");
-        btn.className = "primary";
-        btn.textContent = "Update Now";
-        btn.addEventListener("click", () => {
-          updateBanner.style.display = "none";
-          updatesOverlay.style.display = "";
-          renderUpdates(report);
-          applyUpdates(report);
-        });
-        actions.appendChild(btn);
-        container.appendChild(actions);
-        updateBanner.style.display = "none";
-      } else {
-        try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
-      }
-      checkUpdatesBtn.parentElement.appendChild(container);
-    } catch (err) {
-      toast("Check failed: " + err, "error");
-      console.error(err);
-    } finally {
-      checkUpdatesBtn.disabled = false;
-      checkUpdatesBtn.textContent = "Check for Updates";
-    }
-  });
-
-  // Background update check: 30s after launch, then every 4 hours
-  async function backgroundUpdateCheck() {
-    try {
-      const report = await invoke("check_updates");
-      lastReport = report;
-      updateVersionLabels(report);
+      renderUpdatesCard(report);
       if (report.any_update) {
         const count = report.components.filter((c) => c.update_available).length;
         try { await invoke("set_update_badge", { count }); } catch (_) {}
@@ -990,12 +971,32 @@
         updateBanner.style.display = "none";
       }
     } catch (err) {
-      console.error("background update check:", err);
+      updatesCardBody.innerHTML = '<div style="color:var(--fg-muted);font-size:12px">Check failed: ' + err + '</div>';
+      console.error("update check:", err);
+    } finally {
+      checkUpdatesBtn.disabled = false;
+      checkUpdatesBtn.textContent = "Check";
     }
   }
 
-  setTimeout(backgroundUpdateCheck, 30000);
-  setInterval(backgroundUpdateCheck, 4 * 60 * 60 * 1000);
+  checkUpdatesBtn.addEventListener("click", doCheckUpdates);
+
+  // Show local versions immediately, then background check after 5s
+  invoke("get_versions").then((v) => {
+    // Quick render with local versions only (no network)
+    const fakeReport = {
+      any_update: false,
+      components: [
+        { name: "Launcher", current: v.launcher || "?", latest: "unknown", update_available: false },
+        { name: "Tianshu Server", current: v.tianshu || "?", latest: "unknown", update_available: false },
+        { name: "Local Bridge", current: v.bridge || "?", latest: "unknown", update_available: false },
+      ],
+    };
+    renderUpdatesCard(fakeReport);
+  }).catch(() => {});
+
+  setTimeout(doCheckUpdates, 5000);
+  setInterval(doCheckUpdates, 4 * 60 * 60 * 1000);
 
   // ─── settings ───────────────────────────────────────────────────
 
