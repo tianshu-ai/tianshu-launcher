@@ -531,20 +531,21 @@
       <div id="tts-progress" class="tts-progress" style="display:none"></div>
     </div>
 
-    <!-- Update banner (hidden until background check finds updates) -->
-    <div id="update-banner" class="update-banner" style="display:none">
-      <span id="update-banner-text"></span>
-      <button id="update-banner-btn">Update</button>
-    </div>
+  </div>
 
-    <!-- Expanded update panel (shown when user clicks Update) -->
-    <div id="updates-panel" class="updates-panel" style="display:none">
-      <div class="updates-head">
-        <span id="updates-title">Updates</span>
-        <button id="close-updates-btn" style="font-size:11px;padding:3px 8px">Close</button>
-      </div>
-      <div id="updates-body"></div>
+  <!-- Update banner (always visible, outside tabs) -->
+  <div id="update-banner" class="update-banner" style="display:none">
+    <span id="update-banner-text"></span>
+    <button id="update-banner-btn">Update</button>
+  </div>
+
+  <!-- Expanded update panel (always visible, outside tabs) -->
+  <div id="updates-panel" class="updates-panel" style="display:none">
+    <div class="updates-head">
+      <span id="updates-title">Updates</span>
+      <button id="close-updates-btn" style="font-size:11px;padding:3px 8px">Close</button>
     </div>
+    <div id="updates-body"></div>
   </div>
 
   <!-- Bridge tab -->
