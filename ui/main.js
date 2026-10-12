@@ -609,7 +609,7 @@
 
   // ─── updates (banner + expanded panel) ─────────────────────────
 
-  const updateBanner = document.getElementById("update-banner");
+  const updateBanner = document.getElementById("update-banner"); // may be null (removed)
   const updateBannerText = document.getElementById("update-banner-text");
   // Server log panel
   const serverLogBtn = document.getElementById("server-log-btn");
@@ -636,7 +636,7 @@
     serverLogPanel.style.display = "none";
   });
 
-  const updateBannerBtn = document.getElementById("update-banner-btn");
+  const updateBannerBtn = document.getElementById("update-banner-btn"); // may be null
   const updatesOverlay = document.getElementById("updates-overlay");
   const updatesPanel = document.getElementById("updates-panel");
   const updatesTitle = document.getElementById("updates-title");
@@ -673,6 +673,7 @@
   }
 
   function showUpdateBanner(report) {
+    if (!updateBanner) return;
     if (!report || !report.any_update) {
       updateBanner.style.display = "none";
       return;
@@ -687,13 +688,15 @@
     updateBanner.style.display = "";
   }
 
-  updateBannerBtn.addEventListener("click", () => {
-    if (lastReport) {
-      updateBanner.style.display = "none";
-      updatesOverlay.style.display = "";
-      renderUpdates(lastReport);
-    }
-  });
+  if (updateBannerBtn) {
+    updateBannerBtn.addEventListener("click", () => {
+      if (lastReport) {
+        if (updateBanner) updateBanner.style.display = "none";
+        updatesOverlay.style.display = "";
+        renderUpdates(lastReport);
+      }
+    });
+  }
 
   if (closeUpdatesBtn) {
     closeUpdatesBtn.addEventListener("click", () => {
@@ -943,7 +946,7 @@
       btn.className = "primary";
       btn.textContent = "Update Now";
       btn.addEventListener("click", () => {
-        updateBanner.style.display = "none";
+        if (updateBanner) updateBanner.style.display = "none";
         updatesOverlay.style.display = "";
         renderUpdates(report);
         applyUpdates(report);
@@ -968,7 +971,7 @@
         showUpdateBanner(report);
       } else {
         try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
-        updateBanner.style.display = "none";
+        if (updateBanner) updateBanner.style.display = "none";
       }
     } catch (err) {
       updatesCardBody.innerHTML = '<div style="color:var(--fg-muted);font-size:12px">Check failed: ' + err + '</div>';
