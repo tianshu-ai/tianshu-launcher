@@ -637,6 +637,7 @@
   });
 
   const updateBannerBtn = document.getElementById("update-banner-btn");
+  const updatesOverlay = document.getElementById("updates-overlay");
   const updatesPanel = document.getElementById("updates-panel");
   const updatesTitle = document.getElementById("updates-title");
   const updatesBody = document.getElementById("updates-body");
@@ -689,13 +690,13 @@
   updateBannerBtn.addEventListener("click", () => {
     if (lastReport) {
       updateBanner.style.display = "none";
-      updatesPanel.style.display = "";
+      updatesOverlay.style.display = "";
       renderUpdates(lastReport);
     }
   });
 
   closeUpdatesBtn.addEventListener("click", () => {
-    updatesPanel.style.display = "none";
+    updatesOverlay.style.display = "none";
     if (lastReport && lastReport.any_update) {
       showUpdateBanner(lastReport);
     }
@@ -898,7 +899,7 @@
         btn.style.marginTop = "8px";
         btn.addEventListener("click", () => {
           updateBanner.style.display = "none";
-          updatesPanel.style.display = "";
+          updatesOverlay.style.display = "";
           renderUpdates(report);
           applyUpdates(report);
         });

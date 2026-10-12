@@ -464,6 +464,23 @@
       padding: 5px 14px;
     }
 
+    /* Update overlay — covers tab content area during upgrade */
+    #updates-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--bg);
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    #updates-overlay .updates-panel {
+      display: block;
+      width: 100%;
+      max-width: 420px;
+    }
+
     .footer {
       margin-top: 14px;
       padding-top: 12px;
@@ -533,21 +550,6 @@
 
   </div>
 
-  <!-- Update banner (always visible, outside tabs) -->
-  <div id="update-banner" class="update-banner" style="display:none">
-    <span id="update-banner-text"></span>
-    <button id="update-banner-btn">Update</button>
-  </div>
-
-  <!-- Expanded update panel (always visible, outside tabs) -->
-  <div id="updates-panel" class="updates-panel" style="display:none">
-    <div class="updates-head">
-      <span id="updates-title">Updates</span>
-      <button id="close-updates-btn" style="font-size:11px;padding:3px 8px">Close</button>
-    </div>
-    <div id="updates-body"></div>
-  </div>
-
   <!-- Bridge tab -->
   <div id="tab-bridge" class="tab-panel">
     <div class="card-version bridge-version" id="bridge-version"></div>
@@ -586,6 +588,23 @@
     </div>
     <div class="settings-footer">
       <button id="check-updates-btn">Check for Updates</button>
+    </div>
+  </div>
+
+  <!-- Update banner — fixed bottom strip, always visible -->
+  <div id="update-banner" class="update-banner" style="display:none">
+    <span id="update-banner-text"></span>
+    <button id="update-banner-btn">Update</button>
+  </div>
+
+  <!-- Update overlay — covers tab area during upgrade -->
+  <div id="updates-overlay" style="display:none">
+    <div id="updates-panel" class="updates-panel">
+      <div class="updates-head">
+        <span id="updates-title">Updates</span>
+        <button id="close-updates-btn" style="font-size:11px;padding:3px 8px">Close</button>
+      </div>
+      <div id="updates-body"></div>
     </div>
   </div>
 
