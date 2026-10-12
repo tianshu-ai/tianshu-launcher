@@ -642,7 +642,7 @@
   const updatesTitle = document.getElementById("updates-title");
   const updatesBody = document.getElementById("updates-body");
   const checkUpdatesBtn = document.getElementById("check-updates-btn");
-  const closeUpdatesBtn = document.getElementById("close-updates-btn");
+  const closeUpdatesBtn = document.getElementById("close-updates-btn"); // may be null if removed
 
   let lastReport = null;
 
@@ -695,12 +695,14 @@
     }
   });
 
-  closeUpdatesBtn.addEventListener("click", () => {
-    updatesOverlay.style.display = "none";
-    if (lastReport && lastReport.any_update) {
-      showUpdateBanner(lastReport);
-    }
-  });
+  if (closeUpdatesBtn) {
+    closeUpdatesBtn.addEventListener("click", () => {
+      updatesOverlay.style.display = "none";
+      if (lastReport && lastReport.any_update) {
+        showUpdateBanner(lastReport);
+      }
+    });
+  }
 
   function renderUpdates(report) {
     updatesBody.innerHTML = "";
