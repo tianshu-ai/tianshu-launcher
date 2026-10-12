@@ -932,7 +932,7 @@
         });
         actions.appendChild(btn);
         container.appendChild(actions);
-        showUpdateBanner(report);
+        updateBanner.style.display = "none";
       } else {
         try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
       }
