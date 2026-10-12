@@ -836,7 +836,7 @@
             "ok"
           );
         } catch (err) {
-          const cancelled = /cancelled/i.test(err);
+          const cancelled = /cancelled/i.test(String(err));
           if (cancelled) {
             updateLine(row, c.name + ": \u23F9 Cancelled", "warn");
           } else {
