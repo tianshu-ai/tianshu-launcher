@@ -333,25 +333,47 @@
       color: var(--muted, #aaa);
     }
     .inline-updates {
-      margin-top: 8px;
+      margin-top: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
       font-size: 12px;
       line-height: 1.6;
+    }
+    .inline-updates-title {
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--fg-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
     }
     .inline-version-row {
       display: flex;
       align-items: center;
       gap: 6px;
+      padding: 4px 0;
+    }
+    .inline-version-row + .inline-version-row {
+      border-top: 1px solid var(--border);
     }
     .inline-version-row .name {
-      font-weight: 600;
+      font-weight: 500;
       min-width: 110px;
+      color: var(--fg);
+    }
+    .inline-version-row .vers {
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 11px;
+      color: var(--fg-muted);
     }
     .inline-version-row .new {
-      color: var(--accent, #4f9);
+      color: var(--accent);
       font-weight: 600;
     }
     .inline-version-row .tag {
-      color: var(--accent, #4f9);
+      color: #4ade80;
     }
     .updates-panel {
       margin-top: 6px;

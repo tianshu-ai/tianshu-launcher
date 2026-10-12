@@ -893,37 +893,45 @@
       const report = await invoke("check_updates");
       lastReport = report;
       updateVersionLabels(report);
-      // Render version info inline next to the check button
+      // Render version info in a card below the check button
       const container = document.createElement("div");
       container.className = "inline-updates";
+      const title = document.createElement("div");
+      title.className = "inline-updates-title";
+      title.textContent = report.any_update ? "Updates available" : "All up to date";
+      if (!report.any_update) title.style.color = "#4ade80";
+      container.appendChild(title);
       report.components.forEach((c) => {
         const row = document.createElement("div");
         row.className = "inline-version-row";
+        const nameSpan = "<span class=\"name\">" + c.name + "</span>";
         if (c.update_available) {
-          row.innerHTML = "<span class=\"name\">" + c.name + "</span> " +
-            c.current + " \u2192 <span class=\"new\">" + c.latest + "</span>";
+          row.innerHTML = nameSpan +
+            "<span class=\"vers\">" + c.current + " \u2192 <span class=\"new\">" + c.latest + "</span></span>";
         } else if (c.latest === "unknown") {
-          row.innerHTML = "<span class=\"name\">" + c.name + "</span> " + c.current;
+          row.innerHTML = nameSpan + "<span class=\"vers\">" + c.current + "</span>";
         } else {
-          row.innerHTML = "<span class=\"name\">" + c.name + "</span> " +
-            c.current + " <span class=\"tag\">\u2713</span>";
+          row.innerHTML = nameSpan +
+            "<span class=\"vers\">" + c.current + " <span class=\"tag\">\u2713</span></span>";
         }
         container.appendChild(row);
       });
       if (report.any_update) {
         const count = report.components.filter((c) => c.update_available).length;
         try { await invoke("set_update_badge", { count }); } catch (_) {}
+        const actions = document.createElement("div");
+        actions.style.cssText = "display:flex;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)";
         const btn = document.createElement("button");
         btn.className = "primary";
         btn.textContent = "Update Now";
-        btn.style.marginTop = "8px";
         btn.addEventListener("click", () => {
           updateBanner.style.display = "none";
           updatesOverlay.style.display = "";
           renderUpdates(report);
           applyUpdates(report);
         });
-        container.appendChild(btn);
+        actions.appendChild(btn);
+        container.appendChild(actions);
         showUpdateBanner(report);
       } else {
         try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
