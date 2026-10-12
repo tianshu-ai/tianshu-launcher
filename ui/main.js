@@ -763,6 +763,25 @@
     updatesBody.innerHTML = "";
     updatesBody.appendChild(progressEl);
 
+    // Cancel button
+    const cancelRow = document.createElement("div");
+    cancelRow.className = "updates-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "danger";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", async () => {
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = "Cancelling\u2026";
+      try {
+        await invoke("cancel_update");
+        toast("Update cancelled");
+      } catch (err) {
+        toast("Cancel: " + err, "error");
+      }
+    });
+    cancelRow.appendChild(cancelBtn);
+    updatesBody.appendChild(cancelRow);
+
     function addLine(text, status) {
       const row = document.createElement("div");
       row.className = "update-row " + status;
@@ -834,6 +853,7 @@
         }
       }
 
+      cancelRow.remove();
       if (allOk && (payloadUpdates.length > 0 || launcherUpdate)) {
         try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
         addLine("Restarting to apply updates\u2026", "pending");

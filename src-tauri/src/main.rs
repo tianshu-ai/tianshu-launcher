@@ -310,6 +310,8 @@ struct ProcState {
     bridges: Mutex<HashMap<String, Child>>,
     /// Optional Qwen3-TTS server child process.
     tts: Mutex<Option<Child>>,
+    /// PID of the npm install child spawned by update_payload, killable via cancel_update.
+    update_pid: Mutex<Option<u32>>,
 }
 
 // ─── bridge profile config (compatible with bridge-desktop) ─────────
@@ -990,16 +992,47 @@ async fn check_updates(app: tauri::AppHandle) -> Result<VersionReport, String> {
 }
 
 #[tauri::command]
-async fn update_payload(app: tauri::AppHandle, sub: String, package: String) -> Result<(), String> {
+async fn update_payload(app: tauri::AppHandle, state: State<'_, ProcState>, sub: String, package: String) -> Result<(), String> {
     if sub != "server" && sub != "bridge" {
         return Err(format!("unknown payload component: {sub}"));
     }
     let node = node_sidecar_path(&app)?;
     let npm_cli = bundled_npm_cli(&app)?;
-    tauri::async_runtime::spawn_blocking(move || install_payload_override(&sub, &package, &node, &npm_cli))
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || install_payload_override_cancellable(&sub, &package, &node, &npm_cli, &app2))
         .await
-        .map_err(|e| format!("update_payload join: {e}"))??;
-    Ok(())
+        .map_err(|e| format!("update_payload join: {e}"))?;
+    *state.update_pid.lock().unwrap() = None;
+    result
+}
+
+#[tauri::command]
+fn cancel_update(state: State<ProcState>) -> Result<(), String> {
+    let mut guard = state.update_pid.lock().unwrap();
+    if let Some(pid) = guard.take() {
+        kill_process_tree(pid);
+        Ok(())
+    } else {
+        Err("no update in progress".into())
+    }
+}
+
+/// Kill a process and its children by PID (best-effort).
+fn kill_process_tree(pid: u32) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let mut cmd = Command::new("taskkill");
+        cmd.args(["/T", "/F", "/PID", &pid.to_string()]);
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        let _ = cmd.output();
+    }
+    #[cfg(unix)]
+    {
+        unsafe { libc::killpg(pid as i32, libc::SIGKILL); }
+        unsafe { libc::kill(pid as i32, libc::SIGKILL); }
+    }
 }
 
 #[tauri::command]
@@ -1655,6 +1688,129 @@ fn install_payload_override(sub: &str, package: &str, node: &Path, npm_cli: &Pat
     Ok(())
 }
 
+/// Same as `install_payload_override` but stores the child PID in
+/// `ProcState.update_pid` so `cancel_update` can kill it mid-flight.
+fn install_payload_override_cancellable(sub: &str, package: &str, node: &Path, npm_cli: &Path, app: &tauri::AppHandle) -> Result<(), String> {
+    let override_dir = payload_override_dir(sub);
+    let tmp = override_dir.with_file_name(format!("{sub}.tmp.{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).map_err(|e| format!("mkdir tmp: {e}"))?;
+    std::fs::write(tmp.join("package.json"), serde_json::json!({"name":"x","private":true}).to_string())
+        .map_err(|e| format!("write package.json: {e}"))?;
+
+    let enriched_path = {
+        let sys_path = std::env::var("PATH").unwrap_or_default();
+        match node.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => {
+                let sep = if cfg!(windows) { ";" } else { ":" };
+                format!("{}{sep}{sys_path}", dir.display())
+            }
+            _ => sys_path,
+        }
+    };
+    let settings = load_launcher_settings();
+    let registry = effective_npm_registry(&settings);
+    let install_tag = match effective_update_channel(&settings) {
+        "next" => "next",
+        _ => "latest",
+    };
+    let mut cmd = Command::new(node);
+    cmd.arg(npm_cli)
+        .args(["install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps",
+               &format!("--registry={registry}"), &format!("{package}@{install_tag}")])
+        .current_dir(&tmp)
+        .env("PATH", &enriched_path)
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Start in its own process group so killpg kills all descendants.
+        unsafe { cmd.pre_exec(|| { libc::setpgid(0, 0); Ok(()) }); }
+    }
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("npm install spawn: {e}"))?;
+
+    // Store PID so cancel_update can kill it.
+    let pid = child.id();
+    {
+        let state: State<ProcState> = app.state();
+        *state.update_pid.lock().unwrap() = Some(pid);
+    }
+
+    let status = child.wait().map_err(|e| format!("npm install wait: {e}"))?;
+
+    // Clear PID.
+    {
+        let state: State<ProcState> = app.state();
+        *state.update_pid.lock().unwrap() = None;
+    }
+
+    if !status.success() {
+        let stderr = child.stderr.take().map(|mut s| {
+            let mut buf = String::new();
+            use std::io::Read;
+            let _ = s.read_to_string(&mut buf);
+            buf
+        }).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(format!("npm install failed (exit {}): {}", status, stderr.trim()));
+    }
+
+    // Post-install: same logic as install_payload_override.
+    let pkg_dir = tmp.join("node_modules").join(package);
+    if !pkg_dir.exists() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(format!("installed package not found at {pkg_dir:?}"));
+    }
+
+    let bin_rel = if sub == "server" {
+        pkg_dir.join("packages/server/dist/index.js")
+    } else {
+        let pkg_json: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(pkg_dir.join("package.json")).unwrap_or_default()
+        ).unwrap_or(serde_json::Value::Null);
+        let bin = pkg_json.get("bin").and_then(|b| match b {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Object(m) => m.values().next().and_then(|v| v.as_str().map(|s| s.to_string())),
+            _ => None,
+        }).unwrap_or_else(|| "dist/index.js".to_string());
+        pkg_dir.join(&bin)
+    };
+    if !bin_rel.exists() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return Err(format!("entry not found: {bin_rel:?}"));
+    }
+
+    let rel = bin_rel.strip_prefix(&tmp).map_err(|e| format!("strip_prefix: {e}"))?;
+    let shim = format!("import \"./{}\";
+", rel.to_string_lossy().replace('\\', "/"));
+    std::fs::write(tmp.join("index.js"), shim).map_err(|e| format!("write shim: {e}"))?;
+    std::fs::write(
+        tmp.join("package.json"),
+        serde_json::json!({"name": format!("tianshu-{sub}-override"), "private": true, "type": "module"}).to_string(),
+    ).map_err(|e| format!("write override package.json: {e}"))?;
+
+    if override_dir.exists() {
+        let backup = override_dir.with_file_name(format!("{sub}.old.{}", std::process::id()));
+        std::fs::rename(&override_dir, &backup).map_err(|e| format!("backup rename: {e}"))?;
+        if let Err(e) = std::fs::rename(&tmp, &override_dir) {
+            let _ = std::fs::rename(&backup, &override_dir);
+            return Err(format!("swap rename: {e}"));
+        }
+        let _ = std::fs::remove_dir_all(&backup);
+    } else {
+        if let Some(parent) = override_dir.parent() { let _ = std::fs::create_dir_all(parent); }
+        std::fs::rename(&tmp, &override_dir).map_err(|e| format!("swap rename: {e}"))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn restart_launcher(app: tauri::AppHandle, state: State<ProcState>) {
     // Mirror the tray's Quit handler: kill server + every bridge child
@@ -2252,6 +2408,7 @@ fn main() {
             server_log,
             check_updates,
             update_payload,
+            cancel_update,
             update_launcher,
             get_launcher_settings,
             set_launcher_settings,
