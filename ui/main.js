@@ -836,7 +836,12 @@
             "ok"
           );
         } catch (err) {
-          updateLine(row, c.name + ": \u2717 " + err, "fail");
+          const cancelled = /cancelled/i.test(err);
+          if (cancelled) {
+            updateLine(row, c.name + ": \u23F9 Cancelled", "warn");
+          } else {
+            updateLine(row, c.name + ": \u2717 " + err, "fail");
+          }
           allOk = false;
         }
       }
@@ -868,6 +873,10 @@
       });
       cancelRow.appendChild(doneBtn);
 
+      // Detect if any component was cancelled (vs actual failure)
+      const anyCancelled = progressEl.querySelector(".update-row.warn") !== null;
+      const anyFailed = progressEl.querySelector(".update-row.fail") !== null;
+
       if (allOk && (payloadUpdates.length > 0 || launcherUpdate)) {
         try { await invoke("set_update_badge", { count: 0 }); } catch (_) {}
         addLine("Restarting to apply updates\u2026", "pending");
@@ -880,7 +889,13 @@
           checkUpdatesBtn.disabled = false;
         }
       } else if (!allOk) {
-        updatesTitle.textContent = "Some updates failed";
+        if (anyCancelled && !anyFailed) {
+          updatesTitle.textContent = "Update cancelled";
+        } else if (anyCancelled) {
+          updatesTitle.textContent = "Some updates cancelled";
+        } else {
+          updatesTitle.textContent = "Some updates failed";
+        }
         updatesTitle.className = "warn";
         checkUpdatesBtn.disabled = false;
       } else {
