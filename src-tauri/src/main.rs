@@ -1593,6 +1593,7 @@ fn find_npm() -> Result<PathBuf, String> {
     Err("npm not found: not on PATH and not in well-known locations. Install Node.js or add npm to PATH.".into())
 }
 
+#[allow(dead_code)] // retained as non-cancellable fallback
 fn install_payload_override(sub: &str, package: &str, node: &Path, npm_cli: &Path) -> Result<(), String> {
     let override_dir = payload_override_dir(sub);
     let tmp = override_dir.with_file_name(format!("{sub}.tmp.{}", std::process::id()));
