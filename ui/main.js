@@ -1007,6 +1007,7 @@
   const registryInput = document.getElementById("npm-registry-input");
   const pipIndexInput = document.getElementById("pip-index-input");
   const pythonMirrorInput = document.getElementById("python-mirror-input");
+  const proxyUrlInput = document.getElementById("proxy-url-input");
   const saveSettingsBtn = document.getElementById("save-settings-btn");
 
   invoke("get_launcher_settings").then((s) => {
@@ -1014,6 +1015,7 @@
     if (s && s.npm_registry) registryInput.value = s.npm_registry;
     if (s && s.pip_index) pipIndexInput.value = s.pip_index;
     if (s && s.python_mirror) pythonMirrorInput.value = s.python_mirror;
+    if (s && s.proxy_url) proxyUrlInput.value = s.proxy_url;
   }).catch(() => {});
 
   saveSettingsBtn.addEventListener("click", async () => {
@@ -1021,9 +1023,10 @@
     const npm = registryInput.value.trim() || null;
     const pip = pipIndexInput.value.trim() || null;
     const pyMirror = pythonMirrorInput.value.trim() || null;
+    const proxyUrl = proxyUrlInput.value.trim() || null;
     try {
       await invoke("set_launcher_settings", {
-        settings: { update_channel: channel, npm_registry: npm, pip_index: pip, python_mirror: pyMirror }
+        settings: { update_channel: channel, npm_registry: npm, pip_index: pip, python_mirror: pyMirror, proxy_url: proxyUrl }
       });
       toast("Settings saved");
     } catch (err) {

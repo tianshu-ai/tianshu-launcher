@@ -541,6 +541,12 @@ struct LauncherSettings {
     /// Empty or absent = "stable".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     update_channel: Option<String>,
+    /// HTTP/HTTPS proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://..."
+    /// Applied as HTTP_PROXY/HTTPS_PROXY/http_proxy/https_proxy env vars
+    /// to all child processes (npm, pip, node, etc.).
+    /// Empty or absent = no proxy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    proxy_url: Option<String>,
 }
 
 fn load_launcher_settings() -> LauncherSettings {
@@ -556,6 +562,26 @@ fn save_launcher_settings(s: &LauncherSettings) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(s).map_err(|e| e.to_string())?;
     std::fs::write(launcher_settings_path(), json).map_err(|e| e.to_string())
+}
+
+fn effective_proxy(settings: &LauncherSettings) -> Option<String> {
+    settings.proxy_url.as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+}
+
+/// Inject HTTP_PROXY / HTTPS_PROXY / http_proxy / https_proxy / no_proxy
+/// into a Command. Covers both upper and lowercase variants because
+/// different tools check different cases (npm uses lowercase, curl uses
+/// uppercase, Python requests checks both).
+fn apply_proxy_env(cmd: &mut Command, proxy: &Option<String>) {
+    if let Some(url) = proxy.as_deref() {
+        cmd.env("HTTP_PROXY", url)
+           .env("HTTPS_PROXY", url)
+           .env("http_proxy", url)
+           .env("https_proxy", url)
+           .env("no_proxy", "localhost,127.0.0.1");
+    }
 }
 
 fn effective_npm_registry(settings: &LauncherSettings) -> String {
@@ -695,6 +721,9 @@ fn spawn_child_logged(
     for (k, v) in extra_env {
         cmd.env(k, v);
     }
+    let settings = load_launcher_settings();
+    let proxy = effective_proxy(&settings);
+    apply_proxy_env(&mut cmd, &proxy);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).stdin(Stdio::null());
     #[cfg(windows)]
     {
@@ -844,10 +873,14 @@ async fn fetch_npm_latest(package: &str) -> String {
         "next" => "next",
         _ => "latest",
     };
+    let proxy = effective_proxy(&settings);
     let url = format!("{registry}/{package}/{tag}");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8));
+    if let Some(ref p) = proxy {
+        if let Ok(px) = reqwest::Proxy::all(p) { builder = builder.proxy(px); }
+    }
+    let client = builder.build()
         .unwrap_or_else(|_| reqwest::Client::new());
     let resp = match client.get(&url).send().await {
         Ok(r) => r,
@@ -869,9 +902,14 @@ async fn fetch_npm_latest(package: &str) -> String {
 
 async fn fetch_launcher_latest() -> String {
     let url = "https://api.github.com/repos/tianshu-ai/tianshu-launcher/releases/latest";
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
+    let settings = load_launcher_settings();
+    let proxy = effective_proxy(&settings);
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8));
+    if let Some(ref p) = proxy {
+        if let Ok(px) = reqwest::Proxy::all(p) { builder = builder.proxy(px); }
+    }
+    let client = builder.build()
         .unwrap_or_else(|_| reqwest::Client::new());
     let resp = match client
         .get(url)
@@ -1198,21 +1236,33 @@ fn bundled_python_bin() -> PathBuf {
 /// Download and extract standalone Python if not already present.
 /// Download a file with fallback: try primary URL first, then fallback.
 fn download_file(primary: &str, fallback: &str, dest: &std::path::Path) -> Result<(), String> {
+    let settings = load_launcher_settings();
+    let proxy = effective_proxy(&settings);
     for (i, url) in [primary, fallback].iter().enumerate() {
         println!("[tts] downloading from {} ...", url);
         let ok = if cfg!(windows) {
+            let mut ps_cmd = format!("[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ");
+            if let Some(ref p) = proxy {
+                ps_cmd.push_str(&format!("$proxy = New-Object System.Net.WebProxy('{}'); ", p));
+                ps_cmd.push_str("$proxy.BypassProxyOnLocal = $true; ");
+            }
+            ps_cmd.push_str(&format!("Invoke-WebRequest -Uri '{}' -OutFile '{}' -TimeoutSec 60", url, dest.display()));
+            if proxy.is_some() {
+                ps_cmd.push_str(" -Proxy $proxy");
+            }
             Command::new("powershell")
-                .args(["-NoProfile", "-Command",
-                    &format!("[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '{}' -OutFile '{}' -TimeoutSec 60",
-                        url, dest.display())])
+                .args(["-NoProfile", "-Command", &ps_cmd])
                 .output()
                 .map_or(false, |o| o.status.success())
         } else {
-            Command::new("curl")
-                .args(["-fSL", "--connect-timeout", "15", "--retry", "2", "-o"])
+            let mut cmd = Command::new("curl");
+            cmd.args(["-fSL", "--connect-timeout", "15", "--retry", "2", "-o"])
                 .arg(dest)
-                .arg(url)
-                .output()
+                .arg(url);
+            if let Some(ref p) = proxy {
+                cmd.args(["--proxy", p]);
+            }
+            cmd.output()
                 .map_or(false, |o| o.status.success())
         };
         if ok && dest.exists() && std::fs::metadata(dest).map_or(0, |m| m.len()) > 1000 {
@@ -1321,6 +1371,7 @@ fn install_tts_native() -> Result<String, String> {
     let settings = load_launcher_settings();
 
     // Helper to run pip install with optional index and CREATE_NO_WINDOW on Windows.
+    let proxy = effective_proxy(&settings);
     let pip_install = |args: &[&str], index_url: Option<&str>| -> Result<(), String> {
         log_append(&format!("[tts] pip install {}", args.join(" ")));
         let mut cmd = Command::new(&pip);
@@ -1331,6 +1382,7 @@ fn install_tts_native() -> Result<String, String> {
             cmd.args(["-i", &idx]);
         }
         cmd.args(args);
+        apply_proxy_env(&mut cmd, &proxy);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -1623,12 +1675,14 @@ fn install_payload_override(sub: &str, package: &str, node: &Path, npm_cli: &Pat
         "next" => "next",
         _ => "latest",
     };
+    let proxy = effective_proxy(&settings);
     let mut cmd = Command::new(node);
     cmd.arg(npm_cli)
         .args(["install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps",
                &format!("--registry={registry}"), &format!("{package}@{install_tag}")])
         .current_dir(&tmp)
         .env("PATH", &enriched_path);
+    apply_proxy_env(&mut cmd, &proxy);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -1715,6 +1769,7 @@ fn install_payload_override_cancellable(sub: &str, package: &str, node: &Path, n
         "next" => "next",
         _ => "latest",
     };
+    let proxy = effective_proxy(&settings);
     let mut cmd = Command::new(node);
     cmd.arg(npm_cli)
         .args(["install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps",
@@ -1722,6 +1777,7 @@ fn install_payload_override_cancellable(sub: &str, package: &str, node: &Path, n
         .current_dir(&tmp)
         .env("PATH", &enriched_path)
         .stderr(Stdio::piped());
+    apply_proxy_env(&mut cmd, &proxy);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
