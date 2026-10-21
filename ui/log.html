@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Logs</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+      background: #0a0f1a;
+      color: #c8c8c8;
+      font-size: 12px;
+      line-height: 1.6;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    .toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 14px;
+      background: #131a27;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      flex-shrink: 0;
+      -webkit-app-region: drag;
+    }
+    .toolbar span { font-weight: 600; font-size: 13px; color: #e8e8e8; }
+    .toolbar button {
+      -webkit-app-region: no-drag;
+      background: #1a2232;
+      border: 1px solid rgba(255,255,255,0.1);
+      color: #e8e8e8;
+      padding: 4px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .toolbar button:hover { background: #243044; }
+    pre {
+      flex: 1;
+      overflow: auto;
+      padding: 12px 14px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .loading { color: #9ca3af; padding: 20px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <span id="title">Logs</span>
+    <button id="refresh">Refresh</button>
+  </div>
+  <pre id="body"><div class="loading">Loading…</div></pre>
+  <script>
+    (function() {
+      const tauri = window.__TAURI__;
+      if (!tauri) { document.getElementById("body").textContent = "Tauri bridge not loaded."; return; }
+      const invoke = tauri.core.invoke;
+
+      // Parse query params: ?cmd=server_log or ?cmd=bridge_log&id=xxx&title=xxx
+      const params = new URLSearchParams(window.location.search);
+      const cmd = params.get("cmd") || "server_log";
+      const id = params.get("id") || "";
+      const title = params.get("title") || "Logs";
+
+      document.getElementById("title").textContent = title;
+      document.title = title;
+
+      async function load() {
+        const body = document.getElementById("body");
+        body.innerHTML = '<div class="loading">Loading…</div>';
+        try {
+          const args = id ? { id } : {};
+          const log = await invoke(cmd, args);
+          body.textContent = log || "(empty)";
+          body.scrollTop = body.scrollHeight;
+        } catch (err) {
+          body.textContent = "Failed to load: " + err;
+        }
+      }
+
+      document.getElementById("refresh").addEventListener("click", load);
+      load();
+    })();
+  </script>
+</body>
+</html>

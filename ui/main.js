@@ -190,10 +190,7 @@
     const logBtn = document.createElement("button");
     logBtn.textContent = "Logs";
     logBtn.addEventListener("click", () => {
-      showLog(
-        (p.name || "Bridge") + " Logs",
-        () => invoke("bridge_log", { id: p.id }),
-      );
+      openLogWindow((p.name || "Bridge") + " Logs", "bridge_log", p.id);
     });
     btnGroup.appendChild(logBtn);
 
@@ -621,40 +618,33 @@
 
   const updateBanner = document.getElementById("update-banner"); // may be null (removed)
   const updateBannerText = document.getElementById("update-banner-text");
-  // Log viewer overlay
-  const logOverlay = document.getElementById("log-overlay");
-  const logDialogTitle = document.getElementById("log-dialog-title");
-  const logDialogBody = document.getElementById("log-dialog-body");
-  const logRefreshBtn = document.getElementById("log-refresh-btn");
-  const logCloseBtn = document.getElementById("log-close-btn");
-  let currentLogLoader = null;
+  // Log viewer — opens a separate window
+  const WebviewWindow = tauri.webviewWindow?.WebviewWindow;
+  let logWinCounter = 0;
 
-  async function showLog(title, loader) {
-    currentLogLoader = loader;
-    logDialogTitle.textContent = title;
-    logDialogBody.textContent = "Loading\u2026";
-    logOverlay.style.display = "";
-    try {
-      const log = await loader();
-      logDialogBody.textContent = log || "(empty)";
-      logDialogBody.scrollTop = logDialogBody.scrollHeight;
-    } catch (err) {
-      logDialogBody.textContent = "Failed to load: " + err;
+  function openLogWindow(title, cmd, id) {
+    const label = "log-" + (++logWinCounter);
+    const query = new URLSearchParams({ cmd, title });
+    if (id) query.set("id", id);
+    const url = "log.html?" + query.toString();
+    if (WebviewWindow) {
+      new WebviewWindow(label, {
+        url,
+        title,
+        width: 720,
+        height: 520,
+        center: true,
+        resizable: true,
+      });
+    } else {
+      // Fallback: open in-app (shouldn't happen with withGlobalTauri)
+      window.open(url, label, "width=720,height=520");
     }
   }
 
   const serverLogBtn = document.getElementById("server-log-btn");
   serverLogBtn.addEventListener("click", () => {
-    showLog("Server Logs", () => invoke("server_log"));
-  });
-
-  logRefreshBtn.addEventListener("click", () => {
-    if (currentLogLoader) showLog(logDialogTitle.textContent, currentLogLoader);
-  });
-
-  logCloseBtn.addEventListener("click", () => {
-    logOverlay.style.display = "none";
-    currentLogLoader = null;
+    openLogWindow("Server Logs", "server_log");
   });
 
   const updateBannerBtn = document.getElementById("update-banner-btn"); // may be null
