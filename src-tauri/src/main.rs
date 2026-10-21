@@ -1013,12 +1013,18 @@ fn list_logs() -> Vec<String> {
     names
 }
 
+/// Read any log file by label (used by log.html switcher).
+#[tauri::command]
+fn read_log(label: String) -> Result<String, String> {
+    read_log_tail(&label)
+}
+
 fn read_log_tail(label: &str) -> Result<String, String> {
     let log_path = launcher_data_dir().join("logs").join(format!("{label}.log"));
     let content = std::fs::read_to_string(&log_path)
         .map_err(|e| format!("read {}: {e}", log_path.display()))?;
     let lines: Vec<&str> = content.lines().collect();
-    let start = if lines.len() > 200 { lines.len() - 200 } else { 0 };
+    let start = if lines.len() > 5000 { lines.len() - 5000 } else { 0 };
     Ok(lines[start..].join("\n"))
 }
 
@@ -2504,6 +2510,7 @@ fn main() {
             get_versions,
             server_log,
             bridge_log,
+            read_log,
             list_logs,
             check_updates,
             update_payload,
