@@ -783,7 +783,8 @@ fn spawn_child_logged(
         let mut sink = log_file.try_clone().map_err(|e| format!("clone: {e}"))?;
         std::thread::spawn(move || {
             for line in BufReader::new(pipe).lines().map_while(Result::ok) {
-                let _ = writeln!(sink, "[out] {line}");
+                let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+                let _ = writeln!(sink, "{ts} [INFO] {line}");
             }
         });
     }
@@ -791,7 +792,13 @@ fn spawn_child_logged(
         let mut sink = log_file;
         std::thread::spawn(move || {
             for line in BufReader::new(pipe).lines().map_while(Result::ok) {
-                let _ = writeln!(sink, "[err] {line}");
+                let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f");
+                let level = if line.contains("error") || line.contains("Error") || line.contains("ERROR") {
+                    "ERROR"
+                } else {
+                    "WARN"
+                };
+                let _ = writeln!(sink, "{ts} [{level}] {line}");
             }
         });
     }

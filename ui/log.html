@@ -181,13 +181,36 @@
       // ── timestamp parsing ──
       // Try to extract ISO-ish timestamps from log lines:
       // [2026-10-21T15:30:00.123Z] or 2026-10-21 15:30:00 or [server] prefix
-      const TS_RE = /^(?:\[?(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)\]?\s?)|(?:^\[[\w-]+\]\s*)/;
-      const LEVEL_RE = /\b(error|warn(?:ing)?|info|debug|trace)\b/i;
+      // Structured format: "2026-10-21T15:30:00.123 [INFO] message"
+      // Also handles legacy: "[out] message" or "[err] message"
+      const STRUCTURED_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+\[(INFO|WARN|ERROR|DEBUG|TRACE)\]\s/;
+      const LEGACY_RE = /^\[(out|err)\]\s/;
+      const FALLBACK_TS_RE = /(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/;
+      const FALLBACK_LEVEL_RE = /\b(error|warn(?:ing)?|info|debug|trace)\b/i;
 
       function parseLine(raw) {
-        const tsMatch = raw.match(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/);
+        // Try structured format first
+        const sm = raw.match(STRUCTURED_RE);
+        if (sm) {
+          return {
+            raw,
+            ts: new Date(sm[1]),
+            level: sm[2].toLowerCase().replace("warning", "warn"),
+          };
+        }
+        // Legacy [out]/[err] prefix
+        const lm = raw.match(LEGACY_RE);
+        if (lm) {
+          return {
+            raw,
+            ts: null,
+            level: lm[1] === "err" ? "warn" : "info",
+          };
+        }
+        // Fallback: try to extract timestamp and level from text
+        const tsMatch = raw.match(FALLBACK_TS_RE);
         const ts = tsMatch ? new Date(tsMatch[1].replace(" ", "T")) : null;
-        const lvlMatch = raw.match(LEVEL_RE);
+        const lvlMatch = raw.match(FALLBACK_LEVEL_RE);
         const level = lvlMatch ? lvlMatch[1].toLowerCase().replace("warning", "warn") : null;
         return { raw, ts, level };
       }

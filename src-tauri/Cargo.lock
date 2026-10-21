@@ -4422,6 +4422,7 @@ dependencies = [
 name = "tianshu-launcher"
 version = "0.1.12"
 dependencies = [
+ "chrono",
  "image",
  "libc",
  "reqwest 0.12.28",
