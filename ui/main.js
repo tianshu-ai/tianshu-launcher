@@ -621,25 +621,25 @@
 
   const updateBanner = document.getElementById("update-banner"); // may be null (removed)
   const updateBannerText = document.getElementById("update-banner-text");
-  // Generic log panel
-  const logPanel = document.getElementById("log-panel");
-  const logPanelTitle = document.getElementById("log-panel-title");
-  const logPanelBody = document.getElementById("log-panel-body");
-  const closeLogBtn = document.getElementById("close-log-btn");
-  const refreshLogBtn = document.getElementById("refresh-log-btn");
+  // Log viewer overlay
+  const logOverlay = document.getElementById("log-overlay");
+  const logDialogTitle = document.getElementById("log-dialog-title");
+  const logDialogBody = document.getElementById("log-dialog-body");
+  const logRefreshBtn = document.getElementById("log-refresh-btn");
+  const logCloseBtn = document.getElementById("log-close-btn");
   let currentLogLoader = null;
 
   async function showLog(title, loader) {
     currentLogLoader = loader;
-    logPanelTitle.textContent = title;
-    logPanelBody.textContent = "Loading\u2026";
-    logPanel.style.display = "";
+    logDialogTitle.textContent = title;
+    logDialogBody.textContent = "Loading\u2026";
+    logOverlay.style.display = "";
     try {
       const log = await loader();
-      logPanelBody.textContent = log || "(empty)";
-      logPanelBody.scrollTop = logPanelBody.scrollHeight;
+      logDialogBody.textContent = log || "(empty)";
+      logDialogBody.scrollTop = logDialogBody.scrollHeight;
     } catch (err) {
-      logPanelBody.textContent = "Failed to load: " + err;
+      logDialogBody.textContent = "Failed to load: " + err;
     }
   }
 
@@ -648,12 +648,12 @@
     showLog("Server Logs", () => invoke("server_log"));
   });
 
-  refreshLogBtn.addEventListener("click", () => {
-    if (currentLogLoader) showLog(logPanelTitle.textContent, currentLogLoader);
+  logRefreshBtn.addEventListener("click", () => {
+    if (currentLogLoader) showLog(logDialogTitle.textContent, currentLogLoader);
   });
 
-  closeLogBtn.addEventListener("click", () => {
-    logPanel.style.display = "none";
+  logCloseBtn.addEventListener("click", () => {
+    logOverlay.style.display = "none";
     currentLogLoader = null;
   });
 

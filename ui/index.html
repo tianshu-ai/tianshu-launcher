@@ -304,6 +304,57 @@
       margin-bottom: 8px;
       padding: 0 2px;
     }
+    #log-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(10, 15, 26, 0.9);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .log-dialog {
+      width: 100%;
+      max-width: 800px;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .log-dialog .log-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    .log-dialog .log-head button {
+      font-size: 11px;
+      padding: 3px 10px;
+    }
+    #log-dialog-body {
+      flex: 1;
+      overflow: auto;
+      padding: 12px 16px;
+      font-size: 11px;
+      line-height: 1.5;
+      font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+      white-space: pre-wrap;
+      word-break: break-all;
+      margin: 0;
+      min-height: 300px;
+      max-height: 70vh;
+      color: var(--fg-muted);
+    }
     .log-panel {
       margin-top: 6px;
       background: var(--surface);
@@ -549,16 +600,18 @@
       </div>
     </div>
 
-    <!-- Generic log panel (reused for server + bridge logs) -->
-    <div id="log-panel" class="log-panel" style="display:none">
-      <div class="log-head">
-        <span id="log-panel-title">Logs</span>
-        <div>
-          <button id="refresh-log-btn" style="font-size:11px;padding:3px 8px">Refresh</button>
-          <button id="close-log-btn" style="font-size:11px;padding:3px 8px">Close</button>
+    <!-- Log viewer overlay -->
+    <div id="log-overlay" style="display:none">
+      <div class="log-dialog">
+        <div class="log-head">
+          <span id="log-dialog-title">Logs</span>
+          <div style="display:flex;gap:6px">
+            <button id="log-refresh-btn">Refresh</button>
+            <button id="log-close-btn">Close</button>
+          </div>
         </div>
+        <pre id="log-dialog-body"></pre>
       </div>
-      <pre id="log-panel-body" class="log-body"></pre>
     </div>
 
     <!-- TTS compact card -->
