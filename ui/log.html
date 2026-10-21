@@ -230,6 +230,7 @@
             raw,
             ts: null,
             level: lm[1] === "err" ? "warn" : "info",
+            mod: null,
           };
         }
         // Fallback: try to extract timestamp and level from text
@@ -237,7 +238,7 @@
         const ts = tsMatch ? new Date(tsMatch[1].replace(" ", "T")) : null;
         const lvlMatch = raw.match(FALLBACK_LEVEL_RE);
         const level = lvlMatch ? lvlMatch[1].toLowerCase().replace("warning", "warn") : null;
-        return { raw, ts, level };
+        return { raw, ts, level, mod: null };
       }
 
       // ── load log content ──
@@ -254,6 +255,7 @@
           }
           allLines = (log || "").split("\n").map(parseLine);
           statusFile.textContent = currentId || "server";
+          rebuildModFilter();
           applyFilters();
         } catch (err) {
           logBody.innerHTML = '<div class="empty">Failed: ' + err + '</div>';
@@ -271,6 +273,12 @@
 
         if (from) filtered = filtered.filter(l => !l.ts || l.ts >= from);
         if (to) filtered = filtered.filter(l => !l.ts || l.ts <= to);
+
+        // Module filter
+        const modVal = modFilter.value;
+        if (modVal !== "all") {
+          filtered = filtered.filter(l => l.mod === modVal);
+        }
 
         // Level filter
         const levelVal = levelFilter.value;
@@ -341,6 +349,21 @@
       timeFrom.addEventListener("change", applyFilters);
       timeTo.addEventListener("change", applyFilters);
       levelFilter.addEventListener("change", applyFilters);
+      modFilter.addEventListener("change", applyFilters);
+
+      function rebuildModFilter() {
+        const mods = new Set();
+        for (const l of allLines) { if (l.mod) mods.add(l.mod); }
+        const sorted = [...mods].sort();
+        const prev = modFilter.value;
+        modFilter.innerHTML = '<option value="all">All Modules</option>';
+        for (const m of sorted) {
+          const opt = document.createElement("option");
+          opt.value = m; opt.textContent = m;
+          modFilter.appendChild(opt);
+        }
+        if (sorted.includes(prev)) modFilter.value = prev;
+      }
       refreshBtn.addEventListener("click", loadLog);
 
       // Keyboard shortcut: Cmd/Ctrl+F focuses search
