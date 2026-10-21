@@ -264,6 +264,15 @@
             mod: null,
           };
         }
+        // Legacy tianshu log-tee format: [timestamp] [module] [tenant:x] message
+        const legacyMod = raw.match(/^\[\d{4}-.*?\]\s+\[([\w:.-]+)\]/);
+        if (legacyMod) {
+          const tsM = raw.match(/^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)\]/);
+          const ts = tsM ? new Date(tsM[1]) : null;
+          // Detect level from content
+          const lvl = /\berror\b/i.test(raw) ? 'error' : /\bwarn\b/i.test(raw) ? 'warn' : 'info';
+          return { raw, ts, level: lvl, mod: legacyMod[1] };
+        }
         // Legacy [out]/[err] prefix
         const lm = raw.match(LEGACY_RE);
         if (lm) {
