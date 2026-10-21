@@ -981,10 +981,42 @@ struct LocalVersions {
 
 #[tauri::command]
 fn server_log() -> Result<String, String> {
-    let log_path = launcher_data_dir().join("logs").join("server.log");
+    read_log_tail("server")
+}
+
+#[tauri::command]
+fn bridge_log(id: String) -> Result<String, String> {
+    let cfg = load_bridge_config();
+    let profile = cfg.profiles.iter().find(|p| p.id == id)
+        .ok_or_else(|| format!("profile not found: {id}"))?;
+    let safe: String = profile.name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect();
+    read_log_tail(&format!("bridge-{safe}"))
+}
+
+/// List all available log files (for UI log picker).
+#[tauri::command]
+fn list_logs() -> Vec<String> {
+    let log_dir = launcher_data_dir().join("logs");
+    let mut names = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&log_dir) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.ends_with(".log") {
+                    names.push(name.trim_end_matches(".log").to_string());
+                }
+            }
+        }
+    }
+    names.sort();
+    names
+}
+
+fn read_log_tail(label: &str) -> Result<String, String> {
+    let log_path = launcher_data_dir().join("logs").join(format!("{label}.log"));
     let content = std::fs::read_to_string(&log_path)
         .map_err(|e| format!("read {}: {e}", log_path.display()))?;
-    // Return last 200 lines
     let lines: Vec<&str> = content.lines().collect();
     let start = if lines.len() > 200 { lines.len() - 200 } else { 0 };
     Ok(lines[start..].join("\n"))
@@ -2471,6 +2503,8 @@ fn main() {
             stop_bridge_profile,
             get_versions,
             server_log,
+            bridge_log,
+            list_logs,
             check_updates,
             update_payload,
             cancel_update,

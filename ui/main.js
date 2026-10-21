@@ -187,6 +187,16 @@
     });
     btnGroup.appendChild(toggleBtn);
 
+    const logBtn = document.createElement("button");
+    logBtn.textContent = "Logs";
+    logBtn.addEventListener("click", () => {
+      showLog(
+        (p.name || "Bridge") + " Logs",
+        () => invoke("bridge_log", { id: p.id }),
+      );
+    });
+    btnGroup.appendChild(logBtn);
+
     const editBtn = document.createElement("button");
     editBtn.textContent = editing ? "Close" : "Edit";
     editBtn.addEventListener("click", () => {
@@ -611,29 +621,40 @@
 
   const updateBanner = document.getElementById("update-banner"); // may be null (removed)
   const updateBannerText = document.getElementById("update-banner-text");
-  // Server log panel
-  const serverLogBtn = document.getElementById("server-log-btn");
-  const serverLogPanel = document.getElementById("server-log-panel");
-  const serverLogBody = document.getElementById("server-log-body");
+  // Generic log panel
+  const logPanel = document.getElementById("log-panel");
+  const logPanelTitle = document.getElementById("log-panel-title");
+  const logPanelBody = document.getElementById("log-panel-body");
   const closeLogBtn = document.getElementById("close-log-btn");
+  const refreshLogBtn = document.getElementById("refresh-log-btn");
+  let currentLogLoader = null;
 
-  serverLogBtn.addEventListener("click", async () => {
-    serverLogBtn.disabled = true;
+  async function showLog(title, loader) {
+    currentLogLoader = loader;
+    logPanelTitle.textContent = title;
+    logPanelBody.textContent = "Loading\u2026";
+    logPanel.style.display = "";
     try {
-      const log = await invoke("server_log");
-      serverLogBody.textContent = log || "(empty)";
-      serverLogPanel.style.display = "";
-      serverLogBody.scrollTop = serverLogBody.scrollHeight;
+      const log = await loader();
+      logPanelBody.textContent = log || "(empty)";
+      logPanelBody.scrollTop = logPanelBody.scrollHeight;
     } catch (err) {
-      serverLogBody.textContent = "Failed to load: " + err;
-      serverLogPanel.style.display = "";
-    } finally {
-      serverLogBtn.disabled = false;
+      logPanelBody.textContent = "Failed to load: " + err;
     }
+  }
+
+  const serverLogBtn = document.getElementById("server-log-btn");
+  serverLogBtn.addEventListener("click", () => {
+    showLog("Server Logs", () => invoke("server_log"));
+  });
+
+  refreshLogBtn.addEventListener("click", () => {
+    if (currentLogLoader) showLog(logPanelTitle.textContent, currentLogLoader);
   });
 
   closeLogBtn.addEventListener("click", () => {
-    serverLogPanel.style.display = "none";
+    logPanel.style.display = "none";
+    currentLogLoader = null;
   });
 
   const updateBannerBtn = document.getElementById("update-banner-btn"); // may be null

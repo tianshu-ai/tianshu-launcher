@@ -549,13 +549,16 @@
       </div>
     </div>
 
-    <!-- Server log panel -->
-    <div id="server-log-panel" class="log-panel" style="display:none">
+    <!-- Generic log panel (reused for server + bridge logs) -->
+    <div id="log-panel" class="log-panel" style="display:none">
       <div class="log-head">
-        <span>Server Logs</span>
-        <button id="close-log-btn" style="font-size:11px;padding:3px 8px">Close</button>
+        <span id="log-panel-title">Logs</span>
+        <div>
+          <button id="refresh-log-btn" style="font-size:11px;padding:3px 8px">Refresh</button>
+          <button id="close-log-btn" style="font-size:11px;padding:3px 8px">Close</button>
+        </div>
       </div>
-      <pre id="server-log-body" class="log-body"></pre>
+      <pre id="log-panel-body" class="log-body"></pre>
     </div>
 
     <!-- TTS compact card -->
