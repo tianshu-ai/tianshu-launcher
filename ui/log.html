@@ -156,21 +156,48 @@
       let currentId = initialId;
 
       // ── log file selector ──
+      let allLogNames = [];
+
       async function loadLogList() {
         try {
           const logs = await invoke("list_logs");
+          allLogNames = logs;
           logSelect.innerHTML = "";
+
+          // Group: server files, bridge files
+          const serverFiles = logs.filter(n => n.startsWith("server-"));
+          const bridgeFiles = logs.filter(n => n.startsWith("bridge-"));
+
+          // Add "All Server" / "All Bridge" merged options
+          if (serverFiles.length > 0) {
+            const opt = document.createElement("option");
+            opt.value = "__all_server__";
+            opt.textContent = `All Server (${serverFiles.length} days)`;
+            logSelect.appendChild(opt);
+          }
+          if (bridgeFiles.length > 0) {
+            const opt = document.createElement("option");
+            opt.value = "__all_bridge__";
+            opt.textContent = `All Bridge (${bridgeFiles.length} days)`;
+            logSelect.appendChild(opt);
+          }
+
+          // Individual files (newest first — already sorted by Rust)
           logs.forEach(name => {
             const opt = document.createElement("option");
             opt.value = name;
             opt.textContent = name;
             logSelect.appendChild(opt);
           });
-          // Select the current log
-          const current = currentCmd === "server_log" ? "server"
-            : currentId ? null // bridge logs matched by id
-            : "server";
-          if (current) logSelect.value = current;
+
+          // Default: select today's server log or first "All Server"
+          const today = new Date().toISOString().slice(0, 10);
+          const todayServer = `server-${today}`;
+          if (serverFiles.includes(todayServer)) {
+            logSelect.value = todayServer;
+          } else if (serverFiles.length > 0) {
+            logSelect.value = "__all_server__";
+          }
         } catch (err) {
           console.error("list_logs:", err);
         }
@@ -178,16 +205,16 @@
 
       logSelect.addEventListener("change", () => {
         const name = logSelect.value;
-        if (name === "server") {
-          currentCmd = "server_log";
-          currentId = "";
+        if (name === "__all_server__" || name === "__all_bridge__") {
+          currentCmd = "merged";
+          const prefix = name === "__all_server__" ? "server-" : "bridge-";
+          currentId = JSON.stringify(allLogNames.filter(n => n.startsWith(prefix)));
         } else {
-          // Use generic read_log command
           currentCmd = "read_log";
           currentId = name;
         }
-        titleEl.textContent = name + " Logs";
-        document.title = name + " Logs";
+        titleEl.textContent = name.replace(/__/g, "").replace("all_server", "All Server").replace("all_bridge", "All Bridge") + " Logs";
+        document.title = titleEl.textContent;
         loadLog();
       });
 
@@ -260,7 +287,10 @@
         logBody.innerHTML = '<div class="empty">Loading…</div>';
         try {
           let log;
-          if (currentCmd === "read_log") {
+          if (currentCmd === "merged") {
+            const labels = JSON.parse(currentId);
+            log = await invoke("read_logs_merged", { labels, maxLines: 10000 });
+          } else if (currentCmd === "read_log") {
             log = await invoke("read_log", { label: currentId });
           } else if (currentCmd === "bridge_log") {
             log = await invoke("bridge_log", { id: currentId });

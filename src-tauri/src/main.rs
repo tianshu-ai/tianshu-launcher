@@ -1048,6 +1048,27 @@ fn read_log(label: String) -> Result<String, String> {
     read_log_tail(&label)
 }
 
+/// Read multiple log files, merged and sorted by line content (timestamps sort naturally).
+/// Used for cross-file queries like "all server logs" or "all bridge logs".
+#[tauri::command]
+fn read_logs_merged(labels: Vec<String>, max_lines: Option<usize>) -> Result<String, String> {
+    let max = max_lines.unwrap_or(10_000);
+    let log_dir = home_dir().join(".tianshu").join("logs");
+    let fallback_dir = launcher_data_dir().join("logs");
+    let mut all_lines: Vec<String> = Vec::new();
+    for label in &labels {
+        let path = log_dir.join(format!("{label}.log"));
+        let path = if path.exists() { path } else { fallback_dir.join(format!("{label}.log")) };
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            all_lines.extend(content.lines().map(|l| l.to_string()));
+        }
+    }
+    // Lines with ISO timestamps sort lexicographically
+    all_lines.sort();
+    let start = if all_lines.len() > max { all_lines.len() - max } else { 0 };
+    Ok(all_lines[start..].join("\n"))
+}
+
 fn read_log_tail(label: &str) -> Result<String, String> {
     // Primary: ~/.tianshu/logs/
     let path = home_dir().join(".tianshu").join("logs").join(format!("{label}.log"));
@@ -2550,6 +2571,7 @@ fn main() {
             server_log,
             bridge_log,
             read_log,
+            read_logs_merged,
             list_logs,
             check_updates,
             update_payload,
