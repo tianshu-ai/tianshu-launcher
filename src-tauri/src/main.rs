@@ -1006,7 +1006,7 @@ fn server_log() -> Result<String, String> {
             .collect();
         files.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
         if let Some((_, path)) = files.first() {
-            return read_log_file(&path);
+            return read_log_tail(&path.file_stem().unwrap_or_default().to_string_lossy());
         }
     }
     read_log_tail("server")
@@ -1023,36 +1023,20 @@ fn bridge_log(id: String) -> Result<String, String> {
     read_log_tail(&format!("bridge-{safe}"))
 }
 
-/// List all available log files (for UI log picker).
-/// Merges launcher bridge logs with tianshu's date-rotated server + bridge logs.
+/// List all available log files from ~/.tianshu/logs/ (unified log dir).
 #[tauri::command]
 fn list_logs() -> Vec<String> {
+    let log_dir = home_dir().join(".tianshu").join("logs");
     let mut names = Vec::new();
-
-    // Tianshu server date-rotated logs (~/.tianshu/logs/server-YYYY-MM-DD.log)
-    let tianshu_dir = home_dir().join(".tianshu").join("logs");
-    if let Ok(entries) = std::fs::read_dir(&tianshu_dir) {
+    if let Ok(entries) = std::fs::read_dir(&log_dir) {
         for entry in entries.flatten() {
             if let Some(name) = entry.file_name().to_str() {
-                if name.starts_with("server-") && name.ends_with(".log") {
+                if name.ends_with(".log") {
                     names.push(name.trim_end_matches(".log").to_string());
                 }
             }
         }
     }
-
-    // Bridge date-rotated logs (~/.tianshu-bridge/logs/bridge-YYYY-MM-DD.log)
-    let bridge_dir = home_dir().join(".tianshu-bridge").join("logs");
-    if let Ok(entries) = std::fs::read_dir(&bridge_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if name.starts_with("bridge-") && name.ends_with(".log") {
-                    names.push(name.trim_end_matches(".log").to_string());
-                }
-            }
-        }
-    }
-
     names.sort();
     names.reverse(); // newest first
     names
@@ -1064,27 +1048,23 @@ fn read_log(label: String) -> Result<String, String> {
     read_log_tail(&label)
 }
 
-fn read_log_file(path: &std::path::Path) -> Result<String, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+fn read_log_tail(label: &str) -> Result<String, String> {
+    // Primary: ~/.tianshu/logs/
+    let path = home_dir().join(".tianshu").join("logs").join(format!("{label}.log"));
+    if path.exists() {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("read {}: {e}", path.display()))?;
+        let lines: Vec<&str> = content.lines().collect();
+        let start = if lines.len() > 5000 { lines.len() - 5000 } else { 0 };
+        return Ok(lines[start..].join("\n"));
+    }
+    // Fallback: launcher's own logs dir
+    let fallback = launcher_data_dir().join("logs").join(format!("{label}.log"));
+    let content = std::fs::read_to_string(&fallback)
+        .map_err(|e| format!("read {}: {e}", fallback.display()))?;
     let lines: Vec<&str> = content.lines().collect();
     let start = if lines.len() > 5000 { lines.len() - 5000 } else { 0 };
     Ok(lines[start..].join("\n"))
-}
-
-fn read_log_tail(label: &str) -> Result<String, String> {
-    // Try tianshu date-rotated logs first
-    if label.starts_with("server-") {
-        let path = home_dir().join(".tianshu").join("logs").join(format!("{label}.log"));
-        if path.exists() { return read_log_file(&path); }
-    }
-    if label.starts_with("bridge-") {
-        let path = home_dir().join(".tianshu-bridge").join("logs").join(format!("{label}.log"));
-        if path.exists() { return read_log_file(&path); }
-    }
-    // Fallback: launcher's own logs dir
-    let log_path = launcher_data_dir().join("logs").join(format!("{label}.log"));
-    read_log_file(&log_path)
 }
 
 #[tauri::command]
