@@ -197,30 +197,40 @@
       const FALLBACK_TS_RE = /(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/;
       const FALLBACK_LEVEL_RE = /\b(error|warn(?:ing)?|info|debug|trace)\b/i;
 
+      const PINO_LEVELS = { 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal' };
+
+      function tryParseJson(str) {
+        const idx = str.indexOf('{');
+        if (idx === -1) return null;
+        try { return JSON.parse(str.slice(idx)); } catch { return null; }
+      }
+
       function parseLine(raw) {
-        // Try pino JSON Lines format first
-        if (raw.startsWith('{')) {
-          try {
-            const obj = JSON.parse(raw);
-            const PINO_LEVELS = { 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal' };
-            const level = PINO_LEVELS[obj.level] || obj.level || 'info';
-            const ts = obj.time ? new Date(obj.time) : null;
-            const mod = obj.mod ? `[${obj.mod}] ` : '';
-            const cid = obj.cid ? `{${obj.cid}} ` : '';
-            const msg = obj.msg || '';
-            // Build human-readable display line
-            const tsStr = ts ? ts.toISOString().replace('T', ' ').slice(0, 23) : '';
-            const display = `${tsStr} [${level.toUpperCase()}] ${cid}${mod}${msg}`;
-            return { raw: display, originalJson: raw, ts, level };
-          } catch { /* not JSON, fall through */ }
+        // Try to extract embedded JSON (pino output, possibly prefixed by log-tee timestamp)
+        const obj = tryParseJson(raw);
+        if (obj && obj.msg !== undefined) {
+          const level = PINO_LEVELS[obj.level] || (typeof obj.level === 'string' ? obj.level : 'info');
+          const ts = obj.time ? new Date(obj.time) : null;
+          const mod = obj.mod || null;
+          const cid = obj.cid || null;
+          const modStr = mod ? `[${mod}] ` : '';
+          const cidStr = cid ? `{${cid}} ` : '';
+          const tsStr = ts ? ts.toISOString().replace('T', ' ').slice(0, 23) : '';
+          // Extra fields
+          const skip = new Set(['level','time','mod','cid','msg','pid','hostname']);
+          const extras = Object.keys(obj).filter(k => !skip.has(k));
+          const extraStr = extras.length ? ' ' + extras.map(k => `${k}=${typeof obj[k] === 'string' ? obj[k] : JSON.stringify(obj[k])}`).join(' ') : '';
+          const display = `${tsStr} [${level.toUpperCase()}] ${cidStr}${modStr}${obj.msg}${extraStr}`;
+          return { raw: display, originalJson: raw, ts, level, mod };
         }
-        // Try structured format first
+        // Try structured text format
         const sm = raw.match(STRUCTURED_RE);
         if (sm) {
           return {
             raw,
             ts: new Date(sm[1]),
             level: sm[2].toLowerCase().replace("warning", "warn"),
+            mod: null,
           };
         }
         // Legacy [out]/[err] prefix
