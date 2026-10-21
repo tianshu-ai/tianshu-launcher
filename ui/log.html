@@ -97,13 +97,16 @@
   <div class="toolbar">
     <span class="title" id="title">Logs</span>
     <select id="log-select"></select>
-    <select id="level-filter">
+    <select id="level-filter" title="Filter by level">
       <option value="all">All Levels</option>
       <option value="error">Error</option>
       <option value="warn">Warn+</option>
       <option value="info" selected>Info+</option>
       <option value="debug">Debug+</option>
       <option value="trace">Trace+</option>
+    </select>
+    <select id="mod-filter" title="Filter by module">
+      <option value="all">All Modules</option>
     </select>
     <button id="refresh-btn">Refresh</button>
   </div>
