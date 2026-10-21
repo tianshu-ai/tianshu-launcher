@@ -600,20 +600,6 @@
       </div>
     </div>
 
-    <!-- Log viewer overlay -->
-    <div id="log-overlay" style="display:none">
-      <div class="log-dialog">
-        <div class="log-head">
-          <span id="log-dialog-title">Logs</span>
-          <div style="display:flex;gap:6px">
-            <button id="log-refresh-btn">Refresh</button>
-            <button id="log-close-btn">Close</button>
-          </div>
-        </div>
-        <pre id="log-dialog-body"></pre>
-      </div>
-    </div>
-
     <!-- TTS compact card -->
     <div class="card" id="tts-card">
       <div class="card-row">
@@ -700,5 +686,18 @@
   <div class="toast" id="toast"></div>
 
   <script src="main.js"></script>
+  <!-- Log viewer overlay (must be outside tab panels) -->
+  <div id="log-overlay" style="display:none">
+    <div class="log-dialog">
+      <div class="log-head">
+        <span id="log-dialog-title">Logs</span>
+        <div style="display:flex;gap:6px">
+          <button id="log-refresh-btn">Refresh</button>
+          <button id="log-close-btn">Close</button>
+        </div>
+      </div>
+      <pre id="log-dialog-body"></pre>
+    </div>
+  </div>
 </body>
 </html>
