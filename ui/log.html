@@ -97,6 +97,14 @@
   <div class="toolbar">
     <span class="title" id="title">Logs</span>
     <select id="log-select"></select>
+    <select id="level-filter">
+      <option value="all">All Levels</option>
+      <option value="error">Error</option>
+      <option value="warn">Warn+</option>
+      <option value="info" selected>Info+</option>
+      <option value="debug">Debug+</option>
+      <option value="trace">Trace+</option>
+    </select>
     <button id="refresh-btn">Refresh</button>
   </div>
   <div class="search-row">
@@ -134,6 +142,7 @@
       const statusLines = document.getElementById("status-lines");
       const statusFile = document.getElementById("status-file");
       const refreshBtn = document.getElementById("refresh-btn");
+      const levelFilter = document.getElementById("level-filter");
 
       titleEl.textContent = initialTitle;
       document.title = initialTitle;
@@ -189,6 +198,22 @@
       const FALLBACK_LEVEL_RE = /\b(error|warn(?:ing)?|info|debug|trace)\b/i;
 
       function parseLine(raw) {
+        // Try pino JSON Lines format first
+        if (raw.startsWith('{')) {
+          try {
+            const obj = JSON.parse(raw);
+            const PINO_LEVELS = { 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal' };
+            const level = PINO_LEVELS[obj.level] || obj.level || 'info';
+            const ts = obj.time ? new Date(obj.time) : null;
+            const mod = obj.mod ? `[${obj.mod}] ` : '';
+            const cid = obj.cid ? `{${obj.cid}} ` : '';
+            const msg = obj.msg || '';
+            // Build human-readable display line
+            const tsStr = ts ? ts.toISOString().replace('T', ' ').slice(0, 23) : '';
+            const display = `${tsStr} [${level.toUpperCase()}] ${cid}${mod}${msg}`;
+            return { raw: display, originalJson: raw, ts, level };
+          } catch { /* not JSON, fall through */ }
+        }
         // Try structured format first
         const sm = raw.match(STRUCTURED_RE);
         if (sm) {
@@ -246,6 +271,18 @@
 
         if (from) filtered = filtered.filter(l => !l.ts || l.ts >= from);
         if (to) filtered = filtered.filter(l => !l.ts || l.ts <= to);
+
+        // Level filter
+        const levelVal = levelFilter.value;
+        if (levelVal !== "all") {
+          const RANK = { error: 0, warn: 1, info: 2, debug: 3, trace: 4 };
+          const threshold = RANK[levelVal] ?? 2;
+          filtered = filtered.filter(l => {
+            if (!l.level) return true; // keep lines without detected level
+            return (RANK[l.level] ?? 2) <= threshold;
+          });
+        }
+
         if (query) filtered = filtered.filter(l => l.raw.toLowerCase().includes(query));
 
         statusLines.textContent = filtered.length + " / " + allLines.length + " lines";
@@ -303,6 +340,7 @@
       searchInput.addEventListener("input", debounceFilter);
       timeFrom.addEventListener("change", applyFilters);
       timeTo.addEventListener("change", applyFilters);
+      levelFilter.addEventListener("change", applyFilters);
       refreshBtn.addEventListener("click", loadLog);
 
       // Keyboard shortcut: Cmd/Ctrl+F focuses search
