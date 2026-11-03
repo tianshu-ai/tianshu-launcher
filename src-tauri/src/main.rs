@@ -1135,11 +1135,50 @@ async fn update_payload(app: tauri::AppHandle, state: State<'_, ProcState>, sub:
     let node = node_sidecar_path(&app)?;
     let npm_cli = bundled_npm_cli(&app)?;
     let app2 = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || install_payload_override_cancellable(&sub, &package, &node, &npm_cli, &app2))
+    let sub2 = sub.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || install_payload_override_cancellable(&sub2, &package, &node, &npm_cli, &app2))
         .await
         .map_err(|e| format!("update_payload join: {e}"))?;
     *state.update_pid.lock().unwrap() = None;
-    result
+    result?;
+
+    // After a bridge payload update, restart all running bridge profiles
+    // so they pick up the new code instead of running stale.
+    if sub == "bridge" {
+        let running_ids: Vec<String> = state.bridges.lock().unwrap().keys().cloned().collect();
+        if !running_ids.is_empty() {
+            println!("[launcher] bridge updated, restarting {} running profile(s)", running_ids.len());
+            for id in running_ids {
+                // stop old
+                {
+                    let mut bridges = state.bridges.lock().unwrap();
+                    if let Some(mut child) = bridges.remove(&id) {
+                        kill_child_ref(&mut child);
+                    }
+                }
+                // start new
+                let _ = start_bridge_profile(id, app.clone(), app.state());
+            }
+        }
+    }
+
+    // After a server payload update, restart the server so it picks up new code.
+    if sub == "server" {
+        let server_running = state.server.lock().unwrap().is_some();
+        if server_running {
+            println!("[launcher] server updated, restarting");
+            {
+                let mut server = state.server.lock().unwrap();
+                kill_child(&mut server);
+            }
+            // Emit status so UI knows server stopped; auto-start will
+            // be triggered by the UI or the user can click Start.
+            let _ = app.emit("status-changed", ());
+            let _ = start_server(app.clone(), app.state()).await;
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -1179,6 +1218,27 @@ async fn update_launcher(app: tauri::AppHandle) -> Result<String, String> {
         Some(up) => {
             let version = up.version.clone();
             println!("[launcher] downloading update v{version}...");
+            // Kill all child processes BEFORE the updater restarts us,
+            // otherwise they become orphans (updater doesn't go through
+            // restart_launcher's cleanup path).
+            {
+                let state: State<ProcState> = app.state();
+                let mut server = state.server.lock().unwrap();
+                kill_child(&mut server);
+            }
+            {
+                let state: State<ProcState> = app.state();
+                let mut bridges = state.bridges.lock().unwrap();
+                for (_, child) in bridges.iter_mut() {
+                    kill_child_ref(child);
+                }
+                bridges.clear();
+            }
+            {
+                let state: State<ProcState> = app.state();
+                let mut tts = state.tts.lock().unwrap();
+                kill_child(&mut tts);
+            }
             up.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("install: {e}"))?;
             println!("[launcher] update v{version} installed, restart required");
             Ok(format!("Updated to {version}. Restarting..."))
