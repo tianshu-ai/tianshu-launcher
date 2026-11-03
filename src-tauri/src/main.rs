@@ -1212,7 +1212,14 @@ fn kill_process_tree(pid: u32) {
 
 #[tauri::command]
 async fn update_launcher(app: tauri::AppHandle) -> Result<String, String> {
-    let updater = app.updater_builder().build().map_err(|e| format!("updater init: {e}"))?;
+    let settings = load_launcher_settings();
+    let mut builder = app.updater_builder();
+    if let Some(ref proxy_url) = effective_proxy(&settings) {
+        if let Ok(url) = proxy_url.parse::<url::Url>() {
+            builder = builder.proxy(url);
+        }
+    }
+    let updater = builder.build().map_err(|e| format!("updater init: {e}"))?;
     let update = updater.check().await.map_err(|e| format!("check: {e}"))?;
     match update {
         Some(up) => {
