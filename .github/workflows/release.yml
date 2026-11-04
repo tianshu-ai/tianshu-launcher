@@ -114,12 +114,50 @@ jobs:
           TARGET_TRIPLE: ${{ matrix.target }}
         run: npm run payload
 
+      # ── macOS: ad-hoc code signing ──
+      # Tauri recognises APPLE_SIGNING_IDENTITY="-" as ad-hoc.
+      # No Apple Developer account needed; users will see "Open Anyway"
+      # in System Settings instead of "app is damaged".
+
+      # ── Windows: self-signed certificate ──
+      # Generate a throwaway self-signed code-signing cert in CI,
+      # import it into the cert store, and tell Tauri to use it.
+      # This shows "Tianshu AI" as publisher instead of "Unknown".
+      - name: Create Windows self-signed certificate
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject "CN=Tianshu AI, O=Tianshu AI" `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -NotAfter (Get-Date).AddYears(10)
+          $thumbprint = $cert.Thumbprint
+          echo "WINDOWS_CERT_THUMBPRINT=$thumbprint" >> $env:GITHUB_ENV
+          echo "Certificate created with thumbprint: $thumbprint"
+
+          # Write a Tauri config overlay that sets the thumbprint
+          $configOverlay = @"
+          {
+            "bundle": {
+              "windows": {
+                "certificateThumbprint": "$thumbprint",
+                "digestAlgorithm": "sha256",
+                "timestampUrl": "http://timestamp.digicert.com"
+              }
+            }
+          }
+          "@
+          Set-Content -Path "$env:GITHUB_WORKSPACE\signing-override.json" -Value $configOverlay
+          echo "Signing config overlay written"
+
       - name: Build + create/upload to GitHub Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+          APPLE_SIGNING_IDENTITY: ${{ matrix.os == 'macos-latest' && '-' || '' }}
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: 'Tianshu Launcher ${{ inputs.tag || github.ref_name }}'
@@ -132,21 +170,16 @@ jobs:
             | **Windows** | `.exe` (NSIS) or `.msi` | SmartScreen warning — click "More info → Run anyway" |
             | **Linux** | `.deb` | No issues |
 
-            ### ⚠️ macOS: "App is damaged" / Gatekeeper warning
+            ### ⚠️ macOS first launch
 
-            The app is not yet code-signed. After installing, run this **once** in Terminal:
+            The app is ad-hoc signed (not notarized by Apple). On first launch:
+            1. macOS will show a warning
+            2. Go to **System Settings → Privacy & Security** → scroll down → click **Open Anyway**
 
+            Or run once in Terminal:
             ```bash
             /usr/bin/xattr -cr /Applications/Tianshu.app
             ```
-
-            If you get `option -r not recognized`, a Python xattr is shadowing the system one. Use:
-
-            ```bash
-            find /Applications/Tianshu.app -exec /usr/bin/xattr -c {} +
-            ```
-
-            Then open normally. This removes the quarantine flag that macOS adds to unsigned apps downloaded from the internet.
 
             ---
 
@@ -157,7 +190,9 @@ jobs:
             - In-app updates (Check for Updates in the UI)
           releaseDraft: true
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
-          args: --target ${{ matrix.target }}
+          args: >-
+            --target ${{ matrix.target }}
+            ${{ matrix.os == 'windows-2022' && '--config signing-override.json' || '' }}
 
       - name: Upload artifact (always, even without a release)
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
