@@ -32,7 +32,7 @@ function argOf(name, def) {
   const i = args.indexOf(name);
   return i >= 0 && args[i + 1] ? args[i + 1] : def;
 }
-const SERVER_VERSION = argOf("--server-version", "latest");
+const SERVER_VERSION = argOf("--server-version", "next");
 const BRIDGE_VERSION = argOf("--bridge-version", "latest");
 const NODE_VERSION = argOf("--node-version", process.version);
 
