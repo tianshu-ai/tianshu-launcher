@@ -253,6 +253,7 @@ jobs:
       - name: Re-sign node sidecar with entitlements (macOS)
         if: matrix.os == 'macos-latest'
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
         run: |
@@ -304,6 +305,23 @@ jobs:
               echo "Re-creating DMG..."
               hdiutil create -volname "Tianshu" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG"
               echo "DMG re-created: $DMG"
+            fi
+
+            # Re-upload the re-signed artifacts to the GitHub Release,
+            # overwriting the ones tauri-action already uploaded.
+            TAG="${{ needs.create-release.outputs.tag }}"
+            echo "Uploading re-signed artifacts to release $TAG..."
+            if [ -n "$DMG" ] && [ -f "$DMG" ]; then
+              gh release upload "$TAG" "$DMG" --repo "${{ github.repository }}" --clobber
+              echo "Uploaded DMG"
+            fi
+            if [ -n "$TAR_GZ" ] && [ -f "$TAR_GZ" ]; then
+              gh release upload "$TAG" "$TAR_GZ" --repo "${{ github.repository }}" --clobber
+              echo "Uploaded .app.tar.gz"
+              if [ -f "${TAR_GZ}.sig" ]; then
+                gh release upload "$TAG" "${TAR_GZ}.sig" --repo "${{ github.repository }}" --clobber
+                echo "Uploaded .app.tar.gz.sig"
+              fi
             fi
           else
             echo "::warning::node sidecar not found in app bundle"
