@@ -19,36 +19,82 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build and release (e.g. v0.1.0)'
-        required: true
+        description: 'Tag to build and release (e.g. v0.1.0). Leave empty for continuous.'
+        required: false
         type: string
 
 permissions:
   contents: write
 
+# Determine the effective tag: explicit tag push / workflow_dispatch input / 'continuous' for main push.
+# The 'continuous' release is a rolling pre-release that always points to the latest main build.
+
 jobs:
   # Create the draft release first so all platform jobs can upload to it.
   create-release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      is_continuous: ${{ steps.resolve.outputs.is_continuous }}
     steps:
-      - name: Create draft release
+      - name: Resolve tag
+        id: resolve
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
-          # Check if release already exists
-          if gh release view "$TAG" --repo "${{ github.repository }}" &>/dev/null; then
-            echo "Release $TAG already exists, skipping creation"
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${{ github.ref_name }}"
           else
+            TAG="continuous"
+          fi
+          IS_CONTINUOUS="false"
+          if [ "$TAG" = "continuous" ]; then
+            IS_CONTINUOUS="true"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "is_continuous=$IS_CONTINUOUS" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: $TAG (continuous=$IS_CONTINUOUS)"
+
+      - name: Create or update release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          IS_CONTINUOUS="${{ steps.resolve.outputs.is_continuous }}"
+
+          if [ "$IS_CONTINUOUS" = "true" ]; then
+            # Delete existing continuous release assets so we start fresh
+            if gh release view "$TAG" --repo "${{ github.repository }}" &>/dev/null; then
+              echo "Cleaning existing continuous release..."
+              gh release delete "$TAG" --repo "${{ github.repository }}" --yes --cleanup-tag 2>/dev/null || true
+            fi
+            # Force-move the tag to HEAD
+            git tag -f "$TAG"
+            git push origin "$TAG" --force 2>/dev/null || true
             gh release create "$TAG" \
               --repo "${{ github.repository }}" \
-              --title "Tianshu Launcher $TAG" \
-              --draft \
-              --notes "Building..."
-            echo "Created draft release $TAG"
+              --title "Tianshu Launcher (continuous)" \
+              --prerelease \
+              --notes "Rolling build from \`main\` branch ($(date -u +%Y-%m-%d %H:%M UTC)).\n\nThis release is automatically replaced on every push to main.\n\n⚠️ **Not a stable release** — use for testing only."
+            echo "Created continuous release"
+          else
+            if gh release view "$TAG" --repo "${{ github.repository }}" &>/dev/null; then
+              echo "Release $TAG already exists, skipping creation"
+            else
+              gh release create "$TAG" \
+                --repo "${{ github.repository }}" \
+                --title "Tianshu Launcher $TAG" \
+                --draft \
+                --notes "Building..."
+              echo "Created draft release $TAG"
+            fi
           fi
 
   release:
@@ -67,7 +113,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.create-release.outputs.is_continuous == 'true' && github.sha || needs.create-release.outputs.tag }}
 
       - uses: actions/setup-node@v4
         with:
@@ -159,8 +205,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
           APPLE_SIGNING_IDENTITY: ${{ matrix.os == 'macos-latest' && '-' || '' }}
         with:
-          tagName: ${{ inputs.tag || github.ref_name }}
-          releaseName: 'Tianshu Launcher ${{ inputs.tag || github.ref_name }}'
+          tagName: ${{ needs.create-release.outputs.tag }}
+          releaseName: ${{ needs.create-release.outputs.is_continuous == 'true' && 'Tianshu Launcher (continuous)' || format('Tianshu Launcher {0}', needs.create-release.outputs.tag) }}
           releaseBody: |
             Download the installer for your platform below.
 
@@ -188,8 +234,8 @@ jobs:
             - Local Bridge + browser engine (@playwright/mcp)
             - System tray with server/bridge controls
             - In-app updates (Check for Updates in the UI)
-          releaseDraft: true
-          prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
+          releaseDraft: ${{ needs.create-release.outputs.is_continuous != 'true' }}
+          prerelease: ${{ needs.create-release.outputs.is_continuous == 'true' || contains(needs.create-release.outputs.tag, '-') }}
           args: >-
             --target ${{ matrix.target }}
             ${{ matrix.os == 'windows-2022' && '--config signing-override.json' || '' }}
@@ -260,7 +306,7 @@ jobs:
           fi
 
       - name: Upload artifact (always, even without a release)
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tianshu-launcher-${{ matrix.target }}
@@ -277,12 +323,12 @@ jobs:
 
   # Generate latest.json for the Tauri updater after all platforms finish.
   updater-json:
-    needs: release
+    needs: [create-release, release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.create-release.outputs.is_continuous == 'true' && github.sha || needs.create-release.outputs.tag }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -292,7 +338,7 @@ jobs:
       - name: Generate latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
           set -eo pipefail
           REPO="tianshu-ai/tianshu-launcher"
@@ -346,6 +392,6 @@ jobs:
       - name: Upload latest.json to Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
           gh release upload "$TAG" latest.json --repo tianshu-ai/tianshu-launcher --clobber
