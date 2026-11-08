@@ -42,6 +42,10 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       is_continuous: ${{ steps.resolve.outputs.is_continuous }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Resolve tag
         id: resolve
         env:
