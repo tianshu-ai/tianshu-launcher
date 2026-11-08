@@ -190,6 +190,28 @@ async function prepareNode() {
   const extracted = path.join(tmp, inner);
   fs.copyFileSync(extracted, destBin);
   if (ext === "") fs.chmodSync(destBin, 0o755);
+
+  // macOS: ad-hoc sign the node binary with entitlements so Hardened
+  // Runtime allows V8 JIT and network access. Without this, the
+  // Tauri ad-hoc signing adds runtime flag but no entitlements,
+  // causing SIGTRAP on launch.
+  if (process.platform === "darwin" || (process.env.TARGET_TRIPLE || "").includes("apple-darwin")) {
+    const entitlements = path.join(srcTauri, "node.entitlements.plist");
+    if (fs.existsSync(entitlements)) {
+      console.log(`[payload] signing node sidecar with entitlements...`);
+      try {
+        execFileSync("codesign", [
+          "--force", "--sign", "-",
+          "--entitlements", entitlements,
+          destBin,
+        ], { stdio: "inherit" });
+        console.log(`[payload] node sidecar signed with entitlements`);
+      } catch (e) {
+        console.warn(`[payload] WARNING: codesign failed: ${e.message}`);
+      }
+    }
+  }
+
   console.log(`[payload] node sidecar \u2192 ${destBin}`);
 
   // Also bundle npm from the Node.js distribution so the launcher can

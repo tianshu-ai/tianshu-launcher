@@ -194,6 +194,71 @@ jobs:
             --target ${{ matrix.target }}
             ${{ matrix.os == 'windows-2022' && '--config signing-override.json' || '' }}
 
+      # ── macOS: re-sign node sidecar with entitlements ──
+      # Tauri's ad-hoc signing adds Hardened Runtime to all binaries
+      # but without entitlements. Node.js needs JIT (V8) and network
+      # access entitlements, otherwise macOS kills it with SIGTRAP.
+      # Re-sign the node binary inside the built .app with entitlements,
+      # then re-package the .app.tar.gz and re-sign the Tauri updater sig.
+      - name: Re-sign node sidecar with entitlements (macOS)
+        if: matrix.os == 'macos-latest'
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        run: |
+          set -eo pipefail
+          TARGET="${{ matrix.target }}"
+          APP_DIR="src-tauri/target/${TARGET}/release/bundle/macos/Tianshu.app"
+          NODE_BIN="${APP_DIR}/Contents/MacOS/node"
+
+          if [ ! -f "$NODE_BIN" ]; then
+            echo "::warning::node binary not found at $NODE_BIN, trying with triple suffix"
+            NODE_BIN=$(find "${APP_DIR}/Contents/MacOS" -name 'node*' -not -name 'tianshu*' | head -1)
+          fi
+
+          if [ -n "$NODE_BIN" ] && [ -f "$NODE_BIN" ]; then
+            echo "Re-signing $NODE_BIN with entitlements..."
+            codesign --force --sign - \
+              --entitlements src-tauri/node.entitlements.plist \
+              "$NODE_BIN"
+            echo "Verifying:"
+            codesign -dvv "$NODE_BIN" 2>&1 | grep -E 'flags|Signature|Entitlements' || true
+
+            # Re-sign the app bundle (outer signature must be refreshed
+            # after modifying an inner binary)
+            codesign --force --sign - --deep "$APP_DIR"
+            echo "App bundle re-signed"
+
+            # Re-create the .app.tar.gz that the updater uses
+            TAR_GZ=$(find "src-tauri/target/${TARGET}/release/bundle/macos" -name '*.app.tar.gz' | head -1)
+            if [ -n "$TAR_GZ" ]; then
+              APP_NAME=$(basename "$APP_DIR")
+              BUNDLE_DIR=$(dirname "$TAR_GZ")
+              tar -czf "$TAR_GZ" -C "$(dirname "$APP_DIR")" "$APP_NAME"
+              echo "Re-packaged $TAR_GZ"
+
+              # Re-generate the .sig file for the Tauri updater
+              if command -v tauri &>/dev/null; then
+                tauri signer sign --private-key "$TAURI_SIGNING_PRIVATE_KEY" "$TAR_GZ"
+                echo "Re-signed updater signature"
+              elif [ -f "${TAR_GZ}.sig" ]; then
+                # tauri CLI may not be in PATH; try npx
+                npx @tauri-apps/cli signer sign --private-key "$TAURI_SIGNING_PRIVATE_KEY" "$TAR_GZ" || \
+                  echo "::warning::Could not re-sign updater .sig — updater may reject this build"
+              fi
+            fi
+
+            # Also re-create the .dmg
+            DMG=$(find "src-tauri/target/${TARGET}/release/bundle/dmg" -name '*.dmg' | head -1)
+            if [ -n "$DMG" ]; then
+              echo "Re-creating DMG..."
+              hdiutil create -volname "Tianshu" -srcfolder "$APP_DIR" -ov -format UDZO "$DMG"
+              echo "DMG re-created: $DMG"
+            fi
+          else
+            echo "::warning::node sidecar not found in app bundle"
+          fi
+
       - name: Upload artifact (always, even without a release)
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
