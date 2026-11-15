@@ -1107,6 +1107,8 @@ async fn check_updates(app: tauri::AppHandle) -> Result<VersionReport, String> {
     let launcher_latest = fetch_launcher_latest().await;
     let tianshu_latest = fetch_npm_latest("@tianshu-ai/tianshu").await;
     let bridge_latest = fetch_npm_latest("@tianshu-ai/local-bridge").await;
+    let sidecars_current = sidecars_version_inner();
+    let sidecars_latest = fetch_sidecars_latest().await;
     let components = vec![
         ComponentVersion {
             name: "Launcher".to_string(),
@@ -1122,6 +1124,11 @@ async fn check_updates(app: tauri::AppHandle) -> Result<VersionReport, String> {
             name: "Local Bridge".to_string(),
             update_available: is_update_available(&bridge_current, &bridge_latest),
             current: bridge_current, latest: bridge_latest,
+        },
+        ComponentVersion {
+            name: "Python Sidecars".to_string(),
+            update_available: is_update_available(&sidecars_current, &sidecars_latest),
+            current: sidecars_current, latest: sidecars_latest,
         },
     ];
     let any_update = components.iter().any(|c| c.update_available);
@@ -1864,6 +1871,38 @@ fn stop_decision(state: State<ProcState>) -> DecisionStatus {
 fn decision_log() -> String {
     let log_path = home_dir().join(".tianshu").join("clef-decision-server.log");
     std::fs::read_to_string(&log_path).unwrap_or_else(|_| "No log file found.".into())
+}
+
+/// Read local sidecars version (non-tauri-command helper).
+fn sidecars_version_inner() -> String {
+    let version_file = sidecars_dir().join("version.json");
+    match std::fs::read_to_string(&version_file) {
+        Ok(content) => {
+            content.split("\"version\":").nth(1)
+                .and_then(|s| s.split('"').nth(1))
+                .unwrap_or("unknown")
+                .to_string()
+        }
+        Err(_) => "not installed".into(),
+    }
+}
+
+/// Fetch latest python-sidecars release version from GitHub.
+async fn fetch_sidecars_latest() -> String {
+    let url = format!("https://api.github.com/repos/{SIDECARS_REPO}/releases/latest");
+    match Command::new("curl")
+        .args(["-sL", "-H", "Accept: application/vnd.github+json", &url])
+        .output()
+    {
+        Ok(out) => {
+            let body = String::from_utf8_lossy(&out.stdout);
+            body.split("\"tag_name\":").nth(1)
+                .and_then(|s| s.split('"').nth(1))
+                .map(|t| t.trim_start_matches('v').to_string())
+                .unwrap_or_else(|| "unknown".into())
+        }
+        Err(_) => "unknown".into(),
+    }
 }
 
 #[tauri::command]
