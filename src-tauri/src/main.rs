@@ -1867,6 +1867,21 @@ fn decision_log() -> String {
 }
 
 #[tauri::command]
+fn sidecars_version() -> String {
+    let version_file = sidecars_dir().join("version.json");
+    match std::fs::read_to_string(&version_file) {
+        Ok(content) => {
+            // Simple parse: {"version": "0.1.0"}
+            content.split("\"version\":").nth(1)
+                .and_then(|s| s.split('"').nth(1))
+                .unwrap_or("unknown")
+                .to_string()
+        }
+        Err(_) => "not installed".into(),
+    }
+}
+
+#[tauri::command]
 fn decision_install_log() -> String {
     let log_path = home_dir().join(".tianshu").join("decision-install.log");
     std::fs::read_to_string(&log_path).unwrap_or_else(|_| "No install log found.".into())
@@ -2897,6 +2912,7 @@ fn main() {
             decision_log,
             decision_install_log,
             update_sidecars,
+            sidecars_version,
             restart_launcher,
             set_update_badge
         ])

@@ -1105,33 +1105,33 @@
     row.className = "inline-version-row";
     const nameSpan = '<span class="name">Python Sidecars</span>';
     try {
-      // Read local version from ~/.tianshu/python-sidecars/version.json
-      const status = await invoke("decision_status");
-      // Simple heuristic: if decision venv exists, sidecars are installed
-      const localVer = status.installed ? "installed" : "not installed";
-      row.innerHTML = nameSpan + '<span class="vers">' + localVer + '</span>';
-      // Add update button inline
-      const updateBtn = document.createElement("button");
-      updateBtn.textContent = status.installed ? "Update" : "Download";
-      updateBtn.style.cssText = "font-size:10px;padding:2px 8px;margin-left:8px";
-      updateBtn.addEventListener("click", async () => {
-        updateBtn.disabled = true;
-        updateBtn.textContent = "Updating\u2026";
-        try {
-          const result = await invoke("update_sidecars");
-          toast(result || "Sidecars updated");
-          updateBtn.textContent = "\u2713";
-        } catch (err) {
-          toast("Update failed: " + err, "error");
-          updateBtn.textContent = "Retry";
-          updateBtn.disabled = false;
-        }
-      });
-      row.querySelector(".vers").appendChild(updateBtn);
+      const ver = await invoke("sidecars_version");
+      if (ver === "not installed") {
+        row.innerHTML = nameSpan + '<span class="vers">not installed</span>';
+        const dlBtn = document.createElement("button");
+        dlBtn.textContent = "Download";
+        dlBtn.style.cssText = "font-size:10px;padding:2px 8px;margin-left:8px";
+        dlBtn.addEventListener("click", doUpdateSidecars);
+        row.querySelector(".vers").appendChild(dlBtn);
+      } else {
+        row.innerHTML = nameSpan + '<span class="vers">' + ver + ' <span class="tag">\u2713</span></span>';
+      }
     } catch {
       row.innerHTML = nameSpan + '<span class="vers">unknown</span>';
     }
     container.appendChild(row);
+  }
+
+  async function doUpdateSidecars() {
+    try {
+      toast("Downloading sidecars\u2026");
+      const result = await invoke("update_sidecars");
+      toast(result || "Sidecars updated");
+      // Refresh updates card
+      checkForUpdates();
+    } catch (err) {
+      toast("Update failed: " + err, "error");
+    }
   }
 
   // Shared check logic — populates the card + handles banner/badge
