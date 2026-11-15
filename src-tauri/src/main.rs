@@ -1789,8 +1789,11 @@ async fn install_decision() -> Result<String, String> {
     let log_err = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
 
     println!("[decision] running install.sh (venv + model download)...");
+    let model_dir = home_dir().join(".tianshu").join("models");
     let status = Command::new("bash")
         .arg(&install_sh)
+        .env("PYTHONUNBUFFERED", "1")
+        .env("CLEF_MODEL_DIR", &model_dir)
         .stdout(log_file)
         .stderr(log_err)
         .stdin(std::process::Stdio::null())
