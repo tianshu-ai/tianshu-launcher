@@ -1097,7 +1097,7 @@
             }
             toast(c.name + " updated");
             updateBtn.textContent = "\u2713";
-            checkForUpdates();
+            doCheckUpdates();
           } catch (err) {
             toast("Update failed: " + err, "error");
             updateBtn.textContent = "Retry";
@@ -1133,7 +1133,7 @@
           renderUpdates(report);
           applyUpdates(report);
         } else {
-          checkForUpdates();
+          doCheckUpdates();
         }
       });
       actions.appendChild(btn);
