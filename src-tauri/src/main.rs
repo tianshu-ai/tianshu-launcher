@@ -1827,9 +1827,12 @@ async fn start_decision(state: State<'_, ProcState>) -> Result<DecisionStatus, S
     let log_err = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
 
     println!("[decision] starting server on port {DECISION_PORT}");
+    // Model search path: ~/.tianshu/models/ is the canonical location.
+    let model_dir = home_dir().join(".tianshu").join("models");
     let mut cmd = Command::new(&venv_python);
     cmd.arg(&server_py)
         .args(["--port", &DECISION_PORT.to_string()])
+        .env("CLEF_MODEL_DIR", &model_dir)
         .stdout(log_file)
         .stderr(log_err)
         .stdin(std::process::Stdio::null());
