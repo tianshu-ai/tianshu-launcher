@@ -373,13 +373,29 @@ jobs:
             if [ -n "$f" ]; then cat "$f"; else echo ""; fi
           }
 
+          # Try artifacts first, then fall back to downloading from release
           MAC_SIG=$(read_sig '*.app.tar.gz.sig')
           WIN_NSIS_SIG=$(read_sig '*-setup.exe.sig')
 
-          # Find actual filenames from the GitHub Release
           BASE="https://github.com/${REPO}/releases/download/${TAG}"
           MAC_FILE=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep '.app.tar.gz$' | head -1)
           WIN_NSIS_FILE=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep 'setup.exe$' | head -1)
+
+          # Fallback: download .sig from release if not found in artifacts
+          if [ -z "$MAC_SIG" ] && [ -n "$MAC_FILE" ]; then
+            MAC_SIG_FILE=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep '.app.tar.gz.sig$' | head -1)
+            if [ -n "$MAC_SIG_FILE" ]; then
+              MAC_SIG=$(curl -sL "${BASE}/${MAC_SIG_FILE}")
+              echo "Read MAC_SIG from release asset"
+            fi
+          fi
+          if [ -z "$WIN_NSIS_SIG" ] && [ -n "$WIN_NSIS_FILE" ]; then
+            WIN_SIG_FILE=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep 'setup.exe.sig$' | head -1)
+            if [ -n "$WIN_SIG_FILE" ]; then
+              WIN_NSIS_SIG=$(curl -sL "${BASE}/${WIN_SIG_FILE}")
+              echo "Read WIN_NSIS_SIG from release asset"
+            fi
+          fi
 
           # Validate we have what we need
           if [ -z "$MAC_SIG" ] || [ -z "$MAC_FILE" ]; then
