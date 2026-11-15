@@ -614,6 +614,142 @@
     }
   }
 
+  // ─── Decision Model (compact) ─────────────────────────────
+
+  const decDot = document.getElementById("decision-dot");
+  const decSub = document.getElementById("decision-sub");
+  const decActions = document.getElementById("decision-actions");
+  const decProgressEl = document.getElementById("decision-progress");
+
+  function renderDecisionCompact(s) {
+    decActions.innerHTML = "";
+    if (!s.installed) {
+      decDot.className = "dot";
+      decSub.textContent = "Not installed";
+      const btn = document.createElement("button");
+      btn.className = "primary";
+      btn.textContent = "Install";
+      btn.addEventListener("click", doInstallDecision);
+      decActions.appendChild(btn);
+    } else if (s.running && s.ready) {
+      decDot.className = "dot on";
+      decSub.textContent = "Ready \u00b7 Port " + s.port;
+      const btn = document.createElement("button");
+      btn.textContent = "Stop";
+      btn.addEventListener("click", doStopDecision);
+      decActions.appendChild(btn);
+    } else if (s.running) {
+      decDot.className = "dot starting";
+      decSub.textContent = "Loading model on :" + s.port + "\u2026";
+      const btn = document.createElement("button");
+      btn.textContent = "Stop";
+      btn.addEventListener("click", doStopDecision);
+      decActions.appendChild(btn);
+    } else {
+      decDot.className = "dot";
+      decSub.textContent = "Stopped";
+      const startBtn = document.createElement("button");
+      startBtn.className = "primary";
+      startBtn.textContent = "Start";
+      startBtn.addEventListener("click", doStartDecision);
+      decActions.appendChild(startBtn);
+      const reinstallBtn = document.createElement("button");
+      reinstallBtn.textContent = "Reinstall";
+      reinstallBtn.addEventListener("click", doInstallDecision);
+      decActions.appendChild(reinstallBtn);
+    }
+  }
+
+  async function doInstallDecision() {
+    decActions.innerHTML = "";
+    decDot.className = "dot starting";
+    decSub.textContent = "Installing\u2026";
+    decProgressEl.style.display = "";
+    decProgressEl.textContent = "Installing dependencies + downloading ~18 GB model...";
+    // Poll install log for progress
+    const logPre = document.createElement("pre");
+    logPre.style.cssText = "max-height:150px;overflow:auto;font-size:10px;padding:6px;" +
+      "background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-top:4px;" +
+      "white-space:pre-wrap;word-break:break-all;";
+    logPre.textContent = "Starting...";
+    decProgressEl.appendChild(logPre);
+    const logPoll = setInterval(async () => {
+      try {
+        const log = await invoke("decision_install_log");
+        if (log && log !== "No install log found.") {
+          // Show last 1000 chars
+          logPre.textContent = log.length > 1000 ? "..." + log.slice(-1000) : log;
+          logPre.scrollTop = logPre.scrollHeight;
+        }
+      } catch {}
+    }, 2000);
+    try {
+      const result = await invoke("install_decision");
+      clearInterval(logPoll);
+      decProgressEl.innerHTML = "";
+      decProgressEl.textContent = "\u2713 " + (result || "Installed successfully");
+      toast("Decision model installed");
+      refreshDecision();
+    } catch (err) {
+      clearInterval(logPoll);
+      // Show error above the log
+      const errDiv = document.createElement("div");
+      errDiv.style.cssText = "color:#f87171;margin-bottom:4px";
+      errDiv.textContent = "\u2717 " + err;
+      decProgressEl.insertBefore(errDiv, decProgressEl.firstChild);
+      toast("Install failed: " + err, "error");
+      refreshDecision();
+    }
+  }
+
+  async function doStartDecision() {
+    decDot.className = "dot starting";
+    decSub.textContent = "Starting\u2026";
+    decActions.innerHTML = "";
+    try {
+      await invoke("start_decision");
+      toast("Decision server started");
+      // Poll until ready (model loading takes ~30-60s)
+      let tries = 0;
+      const poll = setInterval(async () => {
+        tries++;
+        try {
+          const s = await invoke("decision_status");
+          if (s.ready || tries > 60) {
+            clearInterval(poll);
+            renderDecisionCompact(s);
+          } else {
+            decSub.textContent = "Loading model (" + tries + "s)\u2026";
+          }
+        } catch { clearInterval(poll); }
+      }, 2000);
+    } catch (err) {
+      toast("Failed to start Decision: " + err, "error");
+      refreshDecision();
+    }
+  }
+
+  async function doStopDecision() {
+    try {
+      await invoke("stop_decision");
+      toast("Decision server stopped");
+    } catch (err) {
+      toast("Failed to stop Decision: " + err, "error");
+    }
+    refreshDecision();
+  }
+
+  async function refreshDecision() {
+    try {
+      const s = await invoke("decision_status");
+      renderDecisionCompact(s);
+    } catch (err) {
+      decDot.className = "dot";
+      decSub.textContent = "Error";
+      decActions.innerHTML = "";
+    }
+  }
+
   // ─── updates (banner + expanded panel) ─────────────────────────
 
   const updateBanner = document.getElementById("update-banner"); // may be null (removed)
@@ -938,10 +1074,43 @@
     report.components.forEach((c) => {
       const row = document.createElement("div");
       row.className = "inline-version-row";
+      row.style.cssText = "display:flex;align-items:center;gap:8px";
       const nameSpan = '<span class="name">' + c.name + '</span>';
       if (c.update_available) {
         row.innerHTML = nameSpan +
           '<span class="vers">' + c.current + ' \u2192 <span class="new">' + c.latest + '</span></span>';
+        // Per-row Update button
+        const updateBtn = document.createElement("button");
+        updateBtn.textContent = "Update";
+        updateBtn.style.cssText = "font-size:10px;padding:2px 8px;margin-left:auto;flex-shrink:0";
+        updateBtn.addEventListener("click", async () => {
+          updateBtn.disabled = true;
+          updateBtn.textContent = "Updating\u2026";
+          try {
+            if (c.name === "Python Sidecars") {
+              await invoke("update_sidecars");
+            } else if (c.name === "Launcher") {
+              // Launcher updates via the overlay flow
+              if (updateBanner) updateBanner.style.display = "none";
+              updatesOverlay.style.display = "";
+              renderUpdates(report);
+              applyUpdates(report);
+              return;
+            } else {
+              const sub = c.name === "Tianshu Server" ? "server" : "bridge";
+              const pkg = c.name === "Tianshu Server" ? "@tianshu-ai/tianshu" : "@tianshu-ai/local-bridge";
+              await invoke("update_payload", { sub, package: pkg });
+            }
+            toast(c.name + " updated");
+            updateBtn.textContent = "\u2713";
+            doCheckUpdates();
+          } catch (err) {
+            toast("Update failed: " + err, "error");
+            updateBtn.textContent = "Retry";
+            updateBtn.disabled = false;
+          }
+        });
+        row.appendChild(updateBtn);
       } else if (c.latest === "unknown") {
         row.innerHTML = nameSpan + '<span class="vers">' + c.current + '</span>';
       } else {
@@ -955,17 +1124,31 @@
       actions.style.cssText = "display:flex;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)";
       const btn = document.createElement("button");
       btn.className = "primary";
-      btn.textContent = "Update Now";
-      btn.addEventListener("click", () => {
-        if (updateBanner) updateBanner.style.display = "none";
-        updatesOverlay.style.display = "";
-        renderUpdates(report);
-        applyUpdates(report);
+      btn.textContent = "Update All";
+      btn.addEventListener("click", async () => {
+        // Update sidecars if needed
+        const sidecarsComp = report.components.find(c => c.name === "Python Sidecars" && c.update_available);
+        if (sidecarsComp) {
+          try { await invoke("update_sidecars"); } catch {}
+        }
+        // Update server/bridge
+        const hasPayloadUpdate = report.components.some(c => c.name !== "Python Sidecars" && c.name !== "Launcher" && c.update_available);
+        if (hasPayloadUpdate || report.components.some(c => c.name === "Launcher" && c.update_available)) {
+          if (updateBanner) updateBanner.style.display = "none";
+          updatesOverlay.style.display = "";
+          renderUpdates(report);
+          applyUpdates(report);
+        } else {
+          doCheckUpdates();
+        }
       });
       actions.appendChild(btn);
       updatesCardBody.appendChild(actions);
     }
   }
+
+  /** Append a "Python Sidecars" row to the updates card body. */
+
 
   // Shared check logic — populates the card + handles banner/badge
   async function doCheckUpdates() {
@@ -1055,8 +1238,10 @@
   refreshServer();
   refreshBridge();
   refreshTts();
+  refreshDecision();
   setInterval(refreshBridge, 5000);
   setInterval(refreshTts, 10000);
+  setInterval(refreshDecision, 10000);
 
   // Show local versions immediately (no network)
   invoke("get_versions").then((v) => {

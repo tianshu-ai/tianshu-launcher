@@ -310,6 +310,8 @@ struct ProcState {
     bridges: Mutex<HashMap<String, Child>>,
     /// Optional Qwen3-TTS server child process.
     tts: Mutex<Option<Child>>,
+    /// Optional Clef decision model server child process.
+    decision: Mutex<Option<Child>>,
     /// PID of the npm install child spawned by update_payload, killable via cancel_update.
     update_pid: Mutex<Option<u32>>,
 }
@@ -1105,6 +1107,8 @@ async fn check_updates(app: tauri::AppHandle) -> Result<VersionReport, String> {
     let launcher_latest = fetch_launcher_latest().await;
     let tianshu_latest = fetch_npm_latest("@tianshu-ai/tianshu").await;
     let bridge_latest = fetch_npm_latest("@tianshu-ai/local-bridge").await;
+    let sidecars_current = sidecars_version_inner();
+    let sidecars_latest = fetch_sidecars_latest().await;
     let components = vec![
         ComponentVersion {
             name: "Launcher".to_string(),
@@ -1120,6 +1124,11 @@ async fn check_updates(app: tauri::AppHandle) -> Result<VersionReport, String> {
             name: "Local Bridge".to_string(),
             update_available: is_update_available(&bridge_current, &bridge_latest),
             current: bridge_current, latest: bridge_latest,
+        },
+        ComponentVersion {
+            name: "Python Sidecars".to_string(),
+            update_available: is_update_available(&sidecars_current, &sidecars_latest),
+            current: sidecars_current, latest: sidecars_latest,
         },
     ];
     let any_update = components.iter().any(|c| c.update_available);
@@ -1245,6 +1254,11 @@ async fn update_launcher(app: tauri::AppHandle) -> Result<String, String> {
                 let state: State<ProcState> = app.state();
                 let mut tts = state.tts.lock().unwrap();
                 kill_child(&mut tts);
+            }
+            {
+                let state: State<ProcState> = app.state();
+                let mut decision = state.decision.lock().unwrap();
+                kill_child(&mut decision);
             }
             up.download_and_install(|_, _| {}, || {}).await.map_err(|e| format!("install: {e}"))?;
             println!("[launcher] update v{version} installed, restart required");
@@ -1699,6 +1713,294 @@ fn tts_log() -> String {
 fn tts_install_log() -> String {
     let log_path = home_dir().join(".tianshu").join("tts-install.log");
     std::fs::read_to_string(&log_path).unwrap_or_else(|_| "No install log found.".into())
+}
+
+// ─── Decision Model sidecar (Clef/Laya) ────────────────────────
+
+const DECISION_PORT: u16 = 8710;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DecisionStatus {
+    installed: bool,
+    running: bool,
+    ready: bool,
+    pid: Option<u32>,
+    port: u16,
+}
+
+fn decision_health_check() -> bool {
+    // HTTP GET /health — returns true only when the model is fully loaded
+    // and the server responds with 200. TCP-only check would return true
+    // while the model is still loading, causing status flicker.
+    Command::new("curl")
+        .args(["-sf", "--max-time", "2", &format!("http://127.0.0.1:{DECISION_PORT}/health")])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// python-sidecars repo location.
+fn sidecars_dir() -> PathBuf {
+    home_dir().join(".tianshu").join("python-sidecars")
+}
+
+/// Decision venv python binary.
+fn decision_venv_python() -> PathBuf {
+    let venv = home_dir().join(".tianshu").join("clef-decision-venv");
+    if cfg!(windows) {
+        venv.join("Scripts").join("python.exe")
+    } else {
+        venv.join("bin").join("python")
+    }
+}
+
+#[tauri::command]
+fn decision_status(state: State<ProcState>) -> DecisionStatus {
+    let installed = decision_venv_python().exists();
+    let mut child_guard = state.decision.lock().unwrap();
+    let running = match child_guard.as_mut() {
+        Some(c) => match c.try_wait() {
+            Ok(None) => true,
+            _ => false,
+        },
+        None => false,
+    };
+    if !running {
+        if child_guard.is_some() {
+            let _ = child_guard.take();
+        }
+    }
+    let pid = if running { child_guard.as_ref().map(|c| c.id()) } else { None };
+    let ready = running && decision_health_check();
+    DecisionStatus { installed, running, ready, pid, port: DECISION_PORT }
+}
+
+/// Clone or update python-sidecars repo, then run decision/install.sh.
+#[tauri::command]
+async fn install_decision() -> Result<String, String> {
+    let dir = sidecars_dir();
+    let install_sh = dir.join("decision").join("install.sh");
+    if !install_sh.exists() {
+        return Err("Python Sidecars not downloaded yet. Go to Settings → Update Sidecars first.".into());
+    }
+    let log_path = home_dir().join(".tianshu").join("decision-install.log");
+    let log_file = std::fs::File::create(&log_path)
+        .map_err(|e| format!("create log: {e}"))?;
+    let log_err = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
+
+    println!("[decision] running install.sh (venv + model download)...");
+    let model_dir = home_dir().join(".tianshu").join("models");
+    let status = Command::new("bash")
+        .arg(&install_sh)
+        .env("PYTHONUNBUFFERED", "1")
+        .env("CLEF_MODEL_DIR", &model_dir)
+        .stdout(log_file)
+        .stderr(log_err)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .map_err(|e| format!("bash install.sh: {e}"))?;
+    if !status.success() {
+        let tail = std::fs::read_to_string(&log_path).unwrap_or_default();
+        let tail: String = tail.chars().rev().take(2000).collect::<Vec<_>>().into_iter().rev().collect();
+        return Err(format!("install.sh failed (exit {status}).\n{tail}"));
+    }
+    Ok("Decision model installed successfully.".into())
+}
+
+#[tauri::command]
+async fn start_decision(state: State<'_, ProcState>) -> Result<DecisionStatus, String> {
+    {
+        let mut d = state.decision.lock().unwrap();
+        if let Some(mut child) = d.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    let venv_python = decision_venv_python();
+    if !venv_python.exists() {
+        return Err("Decision model not installed. Click Install first.".into());
+    }
+    let server_py = sidecars_dir().join("decision").join("server.py");
+    if !server_py.exists() {
+        return Err("server.py not found. Run Install first.".into());
+    }
+    let log_path = home_dir().join(".tianshu").join("clef-decision-server.log");
+    let log_file = std::fs::File::create(&log_path)
+        .map_err(|e| format!("create log: {e}"))?;
+    let log_err = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
+
+    println!("[decision] starting server on port {DECISION_PORT}");
+    // Model cache: ~/.tianshu/models/ (ModelScope adds models/ subdir).
+    let model_dir = home_dir().join(".tianshu").join("models");
+    let mut cmd = Command::new(&venv_python);
+    cmd.arg(&server_py)
+        .args(["--port", &DECISION_PORT.to_string()])
+        .env("CLEF_MODEL_DIR", &model_dir)
+        .stdout(log_file)
+        .stderr(log_err)
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn()
+        .map_err(|e| format!("spawn decision server: {e}"))?;
+    let pid = child.id();
+    println!("[decision] spawned pid={pid}");
+
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    match child.try_wait() {
+        Ok(Some(exit)) => {
+            let log_content = std::fs::read_to_string(&log_path).unwrap_or_default();
+            let tail: String = log_content.chars().rev().take(2000).collect::<Vec<_>>().into_iter().rev().collect();
+            Err(format!("Decision server exited immediately (code: {exit}).\n{tail}"))
+        }
+        Ok(None) => {
+            let mut d = state.decision.lock().unwrap();
+            *d = Some(child);
+            Ok(DecisionStatus { installed: true, running: true, ready: false, pid: Some(pid), port: DECISION_PORT })
+        }
+        Err(e) => Err(format!("Failed to check process status: {e}")),
+    }
+}
+
+#[tauri::command]
+fn stop_decision(state: State<ProcState>) -> DecisionStatus {
+    let mut d = state.decision.lock().unwrap();
+    if let Some(mut child) = d.take() {
+        println!("[decision] stopping pid={}", child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    DecisionStatus { installed: decision_venv_python().exists(), running: false, ready: false, pid: None, port: DECISION_PORT }
+}
+
+#[tauri::command]
+fn decision_log() -> String {
+    let log_path = home_dir().join(".tianshu").join("clef-decision-server.log");
+    std::fs::read_to_string(&log_path).unwrap_or_else(|_| "No log file found.".into())
+}
+
+/// Read local sidecars version (non-tauri-command helper).
+fn sidecars_version_inner() -> String {
+    let version_file = sidecars_dir().join("version.json");
+    match std::fs::read_to_string(&version_file) {
+        Ok(content) => {
+            content.split("\"version\":").nth(1)
+                .and_then(|s| s.split('"').nth(1))
+                .unwrap_or("unknown")
+                .to_string()
+        }
+        Err(_) => "not installed".into(),
+    }
+}
+
+/// Fetch latest python-sidecars release version from GitHub.
+async fn fetch_sidecars_latest() -> String {
+    let url = format!("https://api.github.com/repos/{SIDECARS_REPO}/releases/latest");
+    match Command::new("curl")
+        .args(["-sL", "-H", "Accept: application/vnd.github+json", &url])
+        .output()
+    {
+        Ok(out) => {
+            let body = String::from_utf8_lossy(&out.stdout);
+            body.split("\"tag_name\":").nth(1)
+                .and_then(|s| s.split('"').nth(1))
+                .map(|t| t.trim_start_matches('v').to_string())
+                .unwrap_or_else(|| "unknown".into())
+        }
+        Err(_) => "unknown".into(),
+    }
+}
+
+#[tauri::command]
+fn sidecars_version() -> String {
+    let version_file = sidecars_dir().join("version.json");
+    match std::fs::read_to_string(&version_file) {
+        Ok(content) => {
+            // Simple parse: {"version": "0.1.0"}
+            content.split("\"version\":").nth(1)
+                .and_then(|s| s.split('"').nth(1))
+                .unwrap_or("unknown")
+                .to_string()
+        }
+        Err(_) => "not installed".into(),
+    }
+}
+
+#[tauri::command]
+fn decision_install_log() -> String {
+    let log_path = home_dir().join(".tianshu").join("decision-install.log");
+    std::fs::read_to_string(&log_path).unwrap_or_else(|_| "No install log found.".into())
+}
+
+const SIDECARS_REPO: &str = "tianshu-ai/python-sidecars";
+
+/// Download/update python-sidecars from GitHub Release.
+#[tauri::command]
+async fn update_sidecars() -> Result<String, String> {
+    let dir = sidecars_dir();
+    std::fs::create_dir_all(&dir).ok();
+
+    // Fetch latest release tag from GitHub API
+    println!("[sidecars] checking latest release...");
+    let api_url = format!("https://api.github.com/repos/{SIDECARS_REPO}/releases/latest");
+    let out = Command::new("curl")
+        .args(["-sL", "-H", "Accept: application/vnd.github+json", &api_url])
+        .output()
+        .map_err(|e| format!("curl: {e}"))?;
+    let body = String::from_utf8_lossy(&out.stdout);
+    // Parse tag_name from JSON (simple extraction without serde_json dependency)
+    let tag = body.split("\"tag_name\":").nth(1)
+        .and_then(|s| s.split('"').nth(1))
+        .ok_or_else(|| format!("Failed to parse release info. Response: {}", &body[..body.len().min(200)]))?
+        .to_string();
+    println!("[sidecars] latest release: {tag}");
+
+    // Check current version
+    let version_file = dir.join("version.json");
+    if version_file.exists() {
+        let current = std::fs::read_to_string(&version_file).unwrap_or_default();
+        let current_ver = current.split("\"version\":").nth(1)
+            .and_then(|s| s.split('"').nth(1))
+            .unwrap_or("");
+        if format!("v{current_ver}") == tag {
+            return Ok(format!("Already up to date ({tag})."));
+        }
+    }
+
+    // Download tarball
+    let tarball_url = format!("https://github.com/{SIDECARS_REPO}/releases/download/{tag}/python-sidecars-{tag}.tar.gz");
+    let tmp = dir.join(".download.tar.gz");
+    println!("[sidecars] downloading {tarball_url}...");
+    let dl = Command::new("curl")
+        .args(["-sL", "-o"])
+        .arg(&tmp)
+        .arg(&tarball_url)
+        .output()
+        .map_err(|e| format!("download: {e}"))?;
+    if !dl.status.success() {
+        return Err(format!("Download failed: {}", String::from_utf8_lossy(&dl.stderr)));
+    }
+
+    // Extract (overwrites existing scripts, preserves venvs/models outside)
+    println!("[sidecars] extracting to {dir:?}...");
+    let extract = Command::new("tar")
+        .args(["xzf"])
+        .arg(&tmp)
+        .arg("-C")
+        .arg(&dir)
+        .output()
+        .map_err(|e| format!("extract: {e}"))?;
+    if !extract.status.success() {
+        return Err(format!("Extract failed: {}", String::from_utf8_lossy(&extract.stderr)));
+    }
+    let _ = std::fs::remove_file(&tmp);
+
+    println!("[sidecars] updated to {tag}");
+    Ok(format!("Updated to {tag}."))
 }
 
 /// Locate the bundled npm-cli.js shipped in resources/npm/.
@@ -2652,6 +2954,14 @@ fn main() {
             stop_tts,
             tts_log,
             tts_install_log,
+            decision_status,
+            install_decision,
+            start_decision,
+            stop_decision,
+            decision_log,
+            decision_install_log,
+            update_sidecars,
+            sidecars_version,
             restart_launcher,
             set_update_badge
         ])
