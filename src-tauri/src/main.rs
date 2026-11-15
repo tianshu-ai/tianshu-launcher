@@ -1729,10 +1729,14 @@ struct DecisionStatus {
 }
 
 fn decision_health_check() -> bool {
-    std::net::TcpStream::connect_timeout(
-        &std::net::SocketAddr::from(([127, 0, 0, 1], DECISION_PORT)),
-        std::time::Duration::from_millis(500),
-    ).is_ok()
+    // HTTP GET /health — returns true only when the model is fully loaded
+    // and the server responds with 200. TCP-only check would return true
+    // while the model is still loading, causing status flicker.
+    Command::new("curl")
+        .args(["-sf", "--max-time", "2", &format!("http://127.0.0.1:{DECISION_PORT}/health")])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 /// python-sidecars repo location.

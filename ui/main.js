@@ -640,7 +640,7 @@
       decActions.appendChild(btn);
     } else if (s.running) {
       decDot.className = "dot starting";
-      decSub.textContent = "Starting on :" + s.port + "\u2026";
+      decSub.textContent = "Loading model on :" + s.port + "\u2026";
       const btn = document.createElement("button");
       btn.textContent = "Stop";
       btn.addEventListener("click", doStopDecision);
@@ -665,32 +665,38 @@
     decDot.className = "dot starting";
     decSub.textContent = "Installing\u2026";
     decProgressEl.style.display = "";
-    decProgressEl.textContent = "Cloning python-sidecars + downloading ~18 GB model, this may take a while\u2026";
+    decProgressEl.textContent = "Installing dependencies + downloading ~18 GB model...";
+    // Poll install log for progress
+    const logPre = document.createElement("pre");
+    logPre.style.cssText = "max-height:150px;overflow:auto;font-size:10px;padding:6px;" +
+      "background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-top:4px;" +
+      "white-space:pre-wrap;word-break:break-all;";
+    logPre.textContent = "Starting...";
+    decProgressEl.appendChild(logPre);
+    const logPoll = setInterval(async () => {
+      try {
+        const log = await invoke("decision_install_log");
+        if (log && log !== "No install log found.") {
+          // Show last 1000 chars
+          logPre.textContent = log.length > 1000 ? "..." + log.slice(-1000) : log;
+          logPre.scrollTop = logPre.scrollHeight;
+        }
+      } catch {}
+    }, 2000);
     try {
       const result = await invoke("install_decision");
+      clearInterval(logPoll);
+      decProgressEl.innerHTML = "";
       decProgressEl.textContent = "\u2713 " + (result || "Installed successfully");
       toast("Decision model installed");
       refreshDecision();
     } catch (err) {
-      decProgressEl.innerHTML = "";
-      decProgressEl.textContent = "\u2717 " + err;
-      const logBtn = document.createElement("button");
-      logBtn.textContent = "View Install Log";
-      logBtn.style.cssText = "margin-top:6px;font-size:11px;padding:3px 8px;display:block";
-      logBtn.addEventListener("click", async () => {
-        try {
-          const log = await invoke("decision_install_log");
-          const pre = document.createElement("pre");
-          pre.style.cssText = "max-height:200px;overflow:auto;font-size:10px;padding:6px;" +
-            "background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-top:4px;" +
-            "white-space:pre-wrap;word-break:break-all;";
-          pre.textContent = log;
-          logBtn.replaceWith(pre);
-        } catch (e) {
-          toast("Failed to read log: " + e, "error");
-        }
-      });
-      decProgressEl.appendChild(logBtn);
+      clearInterval(logPoll);
+      // Show error above the log
+      const errDiv = document.createElement("div");
+      errDiv.style.cssText = "color:#f87171;margin-bottom:4px";
+      errDiv.textContent = "\u2717 " + err;
+      decProgressEl.insertBefore(errDiv, decProgressEl.firstChild);
       toast("Install failed: " + err, "error");
       refreshDecision();
     }
