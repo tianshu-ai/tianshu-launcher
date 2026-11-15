@@ -1789,7 +1789,7 @@ async fn install_decision() -> Result<String, String> {
     let log_err = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
 
     println!("[decision] running install.sh (venv + model download)...");
-    let model_dir = home_dir().join(".tianshu").join("model-cache");
+    let model_dir = home_dir().join(".tianshu").join("models");
     let status = Command::new("bash")
         .arg(&install_sh)
         .env("PYTHONUNBUFFERED", "1")
@@ -1830,8 +1830,8 @@ async fn start_decision(state: State<'_, ProcState>) -> Result<DecisionStatus, S
     let log_err = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
 
     println!("[decision] starting server on port {DECISION_PORT}");
-    // Model cache: ~/.tianshu/model-cache/ (ModelScope adds models/ subdir).
-    let model_dir = home_dir().join(".tianshu").join("model-cache");
+    // Model cache: ~/.tianshu/models/ (ModelScope adds models/ subdir).
+    let model_dir = home_dir().join(".tianshu").join("models");
     let mut cmd = Command::new(&venv_python);
     cmd.arg(&server_py)
         .args(["--port", &DECISION_PORT.to_string()])
