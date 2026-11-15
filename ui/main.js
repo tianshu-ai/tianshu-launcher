@@ -1082,17 +1082,33 @@
     });
     // Python Sidecars version row
     appendSidecarsRow(updatesCardBody);
-    if (report.any_update) {
+    if (report.any_update || sidecarsNeedUpdate) {
       const actions = document.createElement("div");
       actions.style.cssText = "display:flex;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)";
       const btn = document.createElement("button");
       btn.className = "primary";
       btn.textContent = "Update Now";
-      btn.addEventListener("click", () => {
-        if (updateBanner) updateBanner.style.display = "none";
-        updatesOverlay.style.display = "";
-        renderUpdates(report);
-        applyUpdates(report);
+      btn.addEventListener("click", async () => {
+        // Update sidecars if needed
+        if (sidecarsNeedUpdate) {
+          try {
+            toast("Updating Python Sidecars\u2026");
+            await invoke("update_sidecars");
+            toast("Sidecars updated");
+          } catch (err) {
+            toast("Sidecars update failed: " + err, "error");
+          }
+        }
+        // Update server/bridge if needed
+        if (report.any_update) {
+          if (updateBanner) updateBanner.style.display = "none";
+          updatesOverlay.style.display = "";
+          renderUpdates(report);
+          applyUpdates(report);
+        } else {
+          // Only sidecars updated, refresh card
+          checkForUpdates();
+        }
       });
       actions.appendChild(btn);
       updatesCardBody.appendChild(actions);
@@ -1100,21 +1116,36 @@
   }
 
   /** Append a "Python Sidecars" row to the updates card body. */
+  /** Fetch latest python-sidecars release tag from GitHub. */
+  async function fetchSidecarsLatest() {
+    try {
+      const res = await fetch("https://api.github.com/repos/tianshu-ai/python-sidecars/releases/latest");
+      if (!res.ok) return null;
+      const data = await res.json();
+      return (data.tag_name || "").replace(/^v/, "");
+    } catch { return null; }
+  }
+
   async function appendSidecarsRow(container) {
     const row = document.createElement("div");
     row.className = "inline-version-row";
     const nameSpan = '<span class="name">Python Sidecars</span>';
     try {
-      const ver = await invoke("sidecars_version");
-      if (ver === "not installed") {
-        row.innerHTML = nameSpan + '<span class="vers">not installed</span>';
-        const dlBtn = document.createElement("button");
-        dlBtn.textContent = "Download";
-        dlBtn.style.cssText = "font-size:10px;padding:2px 8px;margin-left:8px";
-        dlBtn.addEventListener("click", doUpdateSidecars);
-        row.querySelector(".vers").appendChild(dlBtn);
+      const current = await invoke("sidecars_version");
+      const latest = await fetchSidecarsLatest();
+      if (current === "not installed") {
+        if (latest) {
+          row.innerHTML = nameSpan + '<span class="vers">not installed \u2192 <span class="new">' + latest + '</span></span>';
+        } else {
+          row.innerHTML = nameSpan + '<span class="vers">not installed</span>';
+        }
+        sidecarsNeedUpdate = true;
+      } else if (latest && latest !== current) {
+        row.innerHTML = nameSpan + '<span class="vers">' + current + ' \u2192 <span class="new">' + latest + '</span></span>';
+        sidecarsNeedUpdate = true;
       } else {
-        row.innerHTML = nameSpan + '<span class="vers">' + ver + ' <span class="tag">\u2713</span></span>';
+        row.innerHTML = nameSpan + '<span class="vers">' + current + ' <span class="tag">\u2713</span></span>';
+        sidecarsNeedUpdate = false;
       }
     } catch {
       row.innerHTML = nameSpan + '<span class="vers">unknown</span>';
@@ -1122,17 +1153,7 @@
     container.appendChild(row);
   }
 
-  async function doUpdateSidecars() {
-    try {
-      toast("Downloading sidecars\u2026");
-      const result = await invoke("update_sidecars");
-      toast(result || "Sidecars updated");
-      // Refresh updates card
-      checkForUpdates();
-    } catch (err) {
-      toast("Update failed: " + err, "error");
-    }
-  }
+  let sidecarsNeedUpdate = false;
 
   // Shared check logic — populates the card + handles banner/badge
   async function doCheckUpdates() {
