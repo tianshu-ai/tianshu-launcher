@@ -276,9 +276,15 @@ jobs:
             codesign -dvv "$NODE_BIN" 2>&1 | grep -E 'flags|Signature|Entitlements' || true
 
             # Re-sign the app bundle (outer signature must be refreshed
-            # after modifying an inner binary)
+            # after modifying an inner binary). Use --deep first, then
+            # re-sign node WITH entitlements — --deep strips them.
             codesign --force --sign - --deep "$APP_DIR"
-            echo "App bundle re-signed"
+            codesign --force --sign - \
+              --entitlements src-tauri/node.entitlements.plist \
+              "$NODE_BIN"
+            # Re-sign outer app one more time (inner binary changed)
+            codesign --force --sign - "$APP_DIR"
+            echo "App bundle re-signed (node entitlements preserved)"
 
             # Re-create the .app.tar.gz that the updater uses
             TAR_GZ=$(find "src-tauri/target/${TARGET}/release/bundle/macos" -name '*.app.tar.gz' | head -1)
