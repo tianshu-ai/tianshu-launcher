@@ -1080,6 +1080,8 @@
       }
       updatesCardBody.appendChild(row);
     });
+    // Python Sidecars version row
+    appendSidecarsRow(updatesCardBody);
     if (report.any_update) {
       const actions = document.createElement("div");
       actions.style.cssText = "display:flex;justify-content:flex-end;margin-top:10px;padding-top:8px;border-top:1px solid var(--border)";
@@ -1095,6 +1097,41 @@
       actions.appendChild(btn);
       updatesCardBody.appendChild(actions);
     }
+  }
+
+  /** Append a "Python Sidecars" row to the updates card body. */
+  async function appendSidecarsRow(container) {
+    const row = document.createElement("div");
+    row.className = "inline-version-row";
+    const nameSpan = '<span class="name">Python Sidecars</span>';
+    try {
+      // Read local version from ~/.tianshu/python-sidecars/version.json
+      const status = await invoke("decision_status");
+      // Simple heuristic: if decision venv exists, sidecars are installed
+      const localVer = status.installed ? "installed" : "not installed";
+      row.innerHTML = nameSpan + '<span class="vers">' + localVer + '</span>';
+      // Add update button inline
+      const updateBtn = document.createElement("button");
+      updateBtn.textContent = status.installed ? "Update" : "Download";
+      updateBtn.style.cssText = "font-size:10px;padding:2px 8px;margin-left:8px";
+      updateBtn.addEventListener("click", async () => {
+        updateBtn.disabled = true;
+        updateBtn.textContent = "Updating\u2026";
+        try {
+          const result = await invoke("update_sidecars");
+          toast(result || "Sidecars updated");
+          updateBtn.textContent = "\u2713";
+        } catch (err) {
+          toast("Update failed: " + err, "error");
+          updateBtn.textContent = "Retry";
+          updateBtn.disabled = false;
+        }
+      });
+      row.querySelector(".vers").appendChild(updateBtn);
+    } catch {
+      row.innerHTML = nameSpan + '<span class="vers">unknown</span>';
+    }
+    container.appendChild(row);
   }
 
   // Shared check logic — populates the card + handles banner/badge
