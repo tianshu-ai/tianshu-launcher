@@ -1901,7 +1901,7 @@ fn sidecars_version_inner() -> String {
 async fn fetch_sidecars_latest() -> String {
     let url = format!("https://api.github.com/repos/{SIDECARS_REPO}/releases/latest");
     match Command::new("curl")
-        .args(["-sL", "-H", "Accept: application/vnd.github+json", &url])
+        .args(["-sfL", "--max-time", "10", "-H", "Accept: application/vnd.github+json", &url])
         .output()
     {
         Ok(out) => {
