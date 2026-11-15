@@ -1768,43 +1768,16 @@ fn decision_status(state: State<ProcState>) -> DecisionStatus {
 #[tauri::command]
 async fn install_decision() -> Result<String, String> {
     let dir = sidecars_dir();
+    let install_sh = dir.join("decision").join("install.sh");
+    if !install_sh.exists() {
+        return Err("Python Sidecars not downloaded yet. Go to Settings → Update Sidecars first.".into());
+    }
     let log_path = home_dir().join(".tianshu").join("decision-install.log");
     let log_file = std::fs::File::create(&log_path)
         .map_err(|e| format!("create log: {e}"))?;
     let log_err = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
 
-    // Clone or update python-sidecars repo
-    if dir.join(".git").exists() {
-        println!("[decision] updating python-sidecars...");
-        let out = Command::new("git")
-            .args(["pull", "--ff-only"])
-            .current_dir(&dir)
-            .output()
-            .map_err(|e| format!("git pull: {e}"))?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(format!("git pull failed: {stderr}"));
-        }
-    } else {
-        println!("[decision] cloning python-sidecars...");
-        std::fs::create_dir_all(dir.parent().unwrap_or(&dir)).ok();
-        let out = Command::new("git")
-            .args(["clone", "https://github.com/tianshu-ai/python-sidecars.git"])
-            .arg(&dir)
-            .output()
-            .map_err(|e| format!("git clone: {e}"))?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(format!("git clone failed: {stderr}"));
-        }
-    }
-
-    // Run install.sh
-    let install_sh = dir.join("decision").join("install.sh");
-    if !install_sh.exists() {
-        return Err("decision/install.sh not found in python-sidecars".into());
-    }
-    println!("[decision] running install.sh...");
+    println!("[decision] running install.sh (venv + model download)...");
     let status = Command::new("bash")
         .arg(&install_sh)
         .stdout(log_file)
@@ -1899,23 +1872,71 @@ fn decision_install_log() -> String {
     std::fs::read_to_string(&log_path).unwrap_or_else(|_| "No install log found.".into())
 }
 
-/// Update python-sidecars repo (git pull).
+const SIDECARS_REPO: &str = "tianshu-ai/python-sidecars";
+
+/// Download/update python-sidecars from GitHub Release.
 #[tauri::command]
 async fn update_sidecars() -> Result<String, String> {
     let dir = sidecars_dir();
-    if !dir.join(".git").exists() {
-        return Err("python-sidecars not installed. Install Decision or TTS first.".into());
-    }
-    let out = Command::new("git")
-        .args(["pull", "--ff-only"])
-        .current_dir(&dir)
+    std::fs::create_dir_all(&dir).ok();
+
+    // Fetch latest release tag from GitHub API
+    println!("[sidecars] checking latest release...");
+    let api_url = format!("https://api.github.com/repos/{SIDECARS_REPO}/releases/latest");
+    let out = Command::new("curl")
+        .args(["-sL", "-H", "Accept: application/vnd.github+json", &api_url])
         .output()
-        .map_err(|e| format!("git pull: {e}"))?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).to_string())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).to_string())
+        .map_err(|e| format!("curl: {e}"))?;
+    let body = String::from_utf8_lossy(&out.stdout);
+    // Parse tag_name from JSON (simple extraction without serde_json dependency)
+    let tag = body.split("\"tag_name\":").nth(1)
+        .and_then(|s| s.split('"').nth(1))
+        .ok_or_else(|| format!("Failed to parse release info. Response: {}", &body[..body.len().min(200)]))?
+        .to_string();
+    println!("[sidecars] latest release: {tag}");
+
+    // Check current version
+    let version_file = dir.join("version.json");
+    if version_file.exists() {
+        let current = std::fs::read_to_string(&version_file).unwrap_or_default();
+        let current_ver = current.split("\"version\":").nth(1)
+            .and_then(|s| s.split('"').nth(1))
+            .unwrap_or("");
+        if format!("v{current_ver}") == tag {
+            return Ok(format!("Already up to date ({tag})."));
+        }
     }
+
+    // Download tarball
+    let tarball_url = format!("https://github.com/{SIDECARS_REPO}/releases/download/{tag}/python-sidecars-{tag}.tar.gz");
+    let tmp = dir.join(".download.tar.gz");
+    println!("[sidecars] downloading {tarball_url}...");
+    let dl = Command::new("curl")
+        .args(["-sL", "-o"])
+        .arg(&tmp)
+        .arg(&tarball_url)
+        .output()
+        .map_err(|e| format!("download: {e}"))?;
+    if !dl.status.success() {
+        return Err(format!("Download failed: {}", String::from_utf8_lossy(&dl.stderr)));
+    }
+
+    // Extract (overwrites existing scripts, preserves venvs/models outside)
+    println!("[sidecars] extracting to {dir:?}...");
+    let extract = Command::new("tar")
+        .args(["xzf"])
+        .arg(&tmp)
+        .arg("-C")
+        .arg(&dir)
+        .output()
+        .map_err(|e| format!("extract: {e}"))?;
+    if !extract.status.success() {
+        return Err(format!("Extract failed: {}", String::from_utf8_lossy(&extract.stderr)));
+    }
+    let _ = std::fs::remove_file(&tmp);
+
+    println!("[sidecars] updated to {tag}");
+    Ok(format!("Updated to {tag}."))
 }
 
 /// Locate the bundled npm-cli.js shipped in resources/npm/.
