@@ -614,6 +614,136 @@
     }
   }
 
+  // ─── Decision Model (compact) ─────────────────────────────
+
+  const decDot = document.getElementById("decision-dot");
+  const decSub = document.getElementById("decision-sub");
+  const decActions = document.getElementById("decision-actions");
+  const decProgressEl = document.getElementById("decision-progress");
+
+  function renderDecisionCompact(s) {
+    decActions.innerHTML = "";
+    if (!s.installed) {
+      decDot.className = "dot";
+      decSub.textContent = "Not installed";
+      const btn = document.createElement("button");
+      btn.className = "primary";
+      btn.textContent = "Install";
+      btn.addEventListener("click", doInstallDecision);
+      decActions.appendChild(btn);
+    } else if (s.running && s.ready) {
+      decDot.className = "dot on";
+      decSub.textContent = "Ready \u00b7 Port " + s.port;
+      const btn = document.createElement("button");
+      btn.textContent = "Stop";
+      btn.addEventListener("click", doStopDecision);
+      decActions.appendChild(btn);
+    } else if (s.running) {
+      decDot.className = "dot starting";
+      decSub.textContent = "Starting on :" + s.port + "\u2026";
+      const btn = document.createElement("button");
+      btn.textContent = "Stop";
+      btn.addEventListener("click", doStopDecision);
+      decActions.appendChild(btn);
+    } else {
+      decDot.className = "dot";
+      decSub.textContent = "Stopped";
+      const startBtn = document.createElement("button");
+      startBtn.className = "primary";
+      startBtn.textContent = "Start";
+      startBtn.addEventListener("click", doStartDecision);
+      decActions.appendChild(startBtn);
+      const reinstallBtn = document.createElement("button");
+      reinstallBtn.textContent = "Reinstall";
+      reinstallBtn.addEventListener("click", doInstallDecision);
+      decActions.appendChild(reinstallBtn);
+    }
+  }
+
+  async function doInstallDecision() {
+    decActions.innerHTML = "";
+    decDot.className = "dot starting";
+    decSub.textContent = "Installing\u2026";
+    decProgressEl.style.display = "";
+    decProgressEl.textContent = "Cloning python-sidecars + downloading ~18 GB model, this may take a while\u2026";
+    try {
+      const result = await invoke("install_decision");
+      decProgressEl.textContent = "\u2713 " + (result || "Installed successfully");
+      toast("Decision model installed");
+      refreshDecision();
+    } catch (err) {
+      decProgressEl.innerHTML = "";
+      decProgressEl.textContent = "\u2717 " + err;
+      const logBtn = document.createElement("button");
+      logBtn.textContent = "View Install Log";
+      logBtn.style.cssText = "margin-top:6px;font-size:11px;padding:3px 8px;display:block";
+      logBtn.addEventListener("click", async () => {
+        try {
+          const log = await invoke("decision_install_log");
+          const pre = document.createElement("pre");
+          pre.style.cssText = "max-height:200px;overflow:auto;font-size:10px;padding:6px;" +
+            "background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-top:4px;" +
+            "white-space:pre-wrap;word-break:break-all;";
+          pre.textContent = log;
+          logBtn.replaceWith(pre);
+        } catch (e) {
+          toast("Failed to read log: " + e, "error");
+        }
+      });
+      decProgressEl.appendChild(logBtn);
+      toast("Install failed: " + err, "error");
+      refreshDecision();
+    }
+  }
+
+  async function doStartDecision() {
+    decDot.className = "dot starting";
+    decSub.textContent = "Starting\u2026";
+    decActions.innerHTML = "";
+    try {
+      await invoke("start_decision");
+      toast("Decision server started");
+      // Poll until ready (model loading takes ~30-60s)
+      let tries = 0;
+      const poll = setInterval(async () => {
+        tries++;
+        try {
+          const s = await invoke("decision_status");
+          if (s.ready || tries > 60) {
+            clearInterval(poll);
+            renderDecisionCompact(s);
+          } else {
+            decSub.textContent = "Loading model (" + tries + "s)\u2026";
+          }
+        } catch { clearInterval(poll); }
+      }, 2000);
+    } catch (err) {
+      toast("Failed to start Decision: " + err, "error");
+      refreshDecision();
+    }
+  }
+
+  async function doStopDecision() {
+    try {
+      await invoke("stop_decision");
+      toast("Decision server stopped");
+    } catch (err) {
+      toast("Failed to stop Decision: " + err, "error");
+    }
+    refreshDecision();
+  }
+
+  async function refreshDecision() {
+    try {
+      const s = await invoke("decision_status");
+      renderDecisionCompact(s);
+    } catch (err) {
+      decDot.className = "dot";
+      decSub.textContent = "Error";
+      decActions.innerHTML = "";
+    }
+  }
+
   // ─── updates (banner + expanded panel) ─────────────────────────
 
   const updateBanner = document.getElementById("update-banner"); // may be null (removed)
@@ -1055,8 +1185,10 @@
   refreshServer();
   refreshBridge();
   refreshTts();
+  refreshDecision();
   setInterval(refreshBridge, 5000);
   setInterval(refreshTts, 10000);
+  setInterval(refreshDecision, 10000);
 
   // Show local versions immediately (no network)
   invoke("get_versions").then((v) => {
