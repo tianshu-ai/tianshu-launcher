@@ -1816,6 +1816,14 @@ async fn start_decision(state: State<'_, ProcState>) -> Result<DecisionStatus, S
             let _ = child.wait();
         }
     }
+    // Check if something is already listening on the decision port
+    if std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], DECISION_PORT)),
+        std::time::Duration::from_millis(500),
+    ).is_ok() {
+        println!("[decision] port {DECISION_PORT} already in use — reusing existing server");
+        return Ok(DecisionStatus { installed: true, running: true, ready: true, pid: None, port: DECISION_PORT });
+    }
     let venv_python = decision_venv_python();
     if !venv_python.exists() {
         return Err("Decision model not installed. Click Install first.".into());
