@@ -119,7 +119,7 @@ jobs:
         with:
           ref: ${{ needs.create-release.outputs.is_continuous == 'true' && github.sha || needs.create-release.outputs.tag }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
