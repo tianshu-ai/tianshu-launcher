@@ -2,7 +2,7 @@
   "name": "tianshu-launcher",
   "version": "0.1.23",
   "private": true,
-  "description": "Tianshu Launcher — self-contained desktop app bundling tianshu server, Node runtime, and local-bridge. One click to start the whole stack.",
+  "description": "Tianshu Launcher \u2014 self-contained desktop app bundling tianshu server, Node runtime, and local-bridge. One click to start the whole stack.",
   "type": "module",
   "scripts": {
     "payload": "node scripts/prepare-payload.mjs",
@@ -14,6 +14,6 @@
     "@tauri-apps/cli": "^2"
   },
   "dependencies": {
-    "@tianshu-ai/tianshu": "^0.90.1-next.1730"
+    "@tianshu-ai/tianshu": "0.140.0"
   }
 }
