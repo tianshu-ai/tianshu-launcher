@@ -42,7 +42,7 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       is_continuous: ${{ steps.resolve.outputs.is_continuous }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -115,7 +115,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.create-release.outputs.is_continuous == 'true' && github.sha || needs.create-release.outputs.tag }}
 
@@ -362,7 +362,7 @@ jobs:
     needs: [create-release, release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.create-release.outputs.is_continuous == 'true' && github.sha || needs.create-release.outputs.tag }}
 
