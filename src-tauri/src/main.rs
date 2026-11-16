@@ -400,6 +400,48 @@ struct Status {
 /// Where the Node sidecar lives after Tauri unpacks externalBin.
 /// At dev time it's src-tauri/binaries/; at install time it's the app's
 /// Resources dir (handled by tauri::path::resolve_resource).
+/// On macOS, check if the node binary has JIT entitlements.
+/// If not, re-sign it with entitlements so V8 doesn't get killed by SIGTRAP.
+#[cfg(target_os = "macos")]
+fn ensure_node_entitlements(node: &Path) {
+    // Check if node already has allow-jit entitlement
+    let check = Command::new("codesign")
+        .args(["-d", "--entitlements", "-"])
+        .arg(node)
+        .output();
+    if let Ok(out) = check {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stdout.contains("allow-jit") || stderr.contains("allow-jit") {
+            return; // already has entitlements
+        }
+    }
+    // Write a temporary entitlements plist and re-sign
+    println!("[launcher] node binary missing JIT entitlements, re-signing...");
+    let plist = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n<dict>\n\
+<key>com.apple.security.cs.disable-library-validation</key><true/>\n\
+<key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>\n\
+<key>com.apple.security.cs.allow-jit</key><true/>\n\
+<key>com.apple.security.network.client</key><true/>\n\
+</dict></plist>";
+    let tmp = std::env::temp_dir().join("tianshu-node-entitlements.plist");
+    if std::fs::write(&tmp, plist).is_ok() {
+        let result = Command::new("codesign")
+            .args(["--force", "--sign", "-", "--entitlements"])
+            .arg(&tmp)
+            .arg(node)
+            .output();
+        match result {
+            Ok(o) if o.status.success() => println!("[launcher] node re-signed with entitlements"),
+            Ok(o) => println!("[launcher] codesign failed: {}", String::from_utf8_lossy(&o.stderr)),
+            Err(e) => println!("[launcher] codesign error: {e}"),
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+}
+
 fn node_sidecar_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let triple = rustc_target_triple();
     // Tauri 2 is inconsistent about how it ships externalBin on
@@ -2421,6 +2463,8 @@ async fn start_server(app: tauri::AppHandle, state: State<'_, ProcState>) -> Res
         }
     }
     let node = node_sidecar_path(&app)?;
+    #[cfg(target_os = "macos")]
+    ensure_node_entitlements(&node);
     let entry = resource_payload_path(&app, "server")?;
     let web = web_dist_path(&app)?;
     let ignore = PathBuf::from("1");
@@ -2558,6 +2602,8 @@ fn start_bridge_profile(
         .ok_or_else(|| format!("profile not found: {id}"))?
         .clone();
     let node = node_sidecar_path(&app)?;
+    #[cfg(target_os = "macos")]
+    ensure_node_entitlements(&node);
     let entry = resource_payload_path(&app, "bridge")?;
     let args = bridge_cli_args(&profile);
     // Sanitise profile name for a filename: 'My WSS!' -> 'my-wss'.
