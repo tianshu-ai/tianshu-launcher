@@ -343,7 +343,7 @@ jobs:
 
       - name: Upload artifact (always, even without a release)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tianshu-launcher-${{ matrix.target }}
           path: |
