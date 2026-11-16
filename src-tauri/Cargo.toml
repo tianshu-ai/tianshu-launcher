@@ -30,7 +30,7 @@ libc = "0.2"
 # so pick exactly the Win32 modules we touch and keep the compile
 # fast. If more Windows APIs show up later, add them explicitly
 # instead of enabling umbrella features.
-windows = { version = "0.58", features = [
+windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_System_JobObjects",
   "Win32_System_Threading",
