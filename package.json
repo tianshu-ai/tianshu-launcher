@@ -1,8 +1,8 @@
 {
   "name": "tianshu-launcher",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "private": true,
-  "description": "Tianshu Launcher \u2014 self-contained desktop app bundling tianshu server, Node runtime, and local-bridge. One click to start the whole stack.",
+  "description": "Tianshu Launcher — self-contained desktop app bundling tianshu server, Node runtime, and local-bridge. One click to start the whole stack.",
   "type": "module",
   "scripts": {
     "payload": "node scripts/prepare-payload.mjs",
