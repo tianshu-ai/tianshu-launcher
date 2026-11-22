@@ -14,6 +14,6 @@
     "@tauri-apps/cli": "^2"
   },
   "dependencies": {
-    "@tianshu-ai/tianshu": "0.140.0"
+    "@tianshu-ai/tianshu": "0.147.0"
   }
 }
